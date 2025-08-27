@@ -9,250 +9,212 @@ import { IExternalFeatures } from "./externalfeatures";
 import { IVSCOBOLSettings } from "./vsconfiguration";
 
 export class VSCOBOLFileUtils {
-
     public static isPathInWorkspace(ddir: string, config: ICOBOLSettings): boolean {
         const ws = VSWorkspaceFolders.get(config);
-        if (workspace === undefined || ws === undefined) {
-            return false;
-        }
+        if (!workspace || !ws) return false;
 
         const fullPath = Uri.file(ddir).fsPath;
-        for (const folder of ws) {
-            if (folder.uri.fsPath === fullPath) {
-                return true;
-            }
-        }
-
-        return false;
+        return ws.some(folder => folder.uri.fsPath === fullPath);
     }
 
-    // eslint-disable-next-line @typescript-eslint/ban-types
-    public static getFullWorkspaceFilename(features: IExternalFeatures, sdir: string, sdirMs: BigInt, config: ICOBOLSettings): string | undefined {
+    public static getFullWorkspaceFilename(
+        features: IExternalFeatures,
+        sdir: string,
+        sdirMs: BigInt,
+        config: ICOBOLSettings
+    ): string | undefined {
         const ws = VSWorkspaceFolders.get(config);
-        if (workspace === undefined || ws === undefined) {
-            return undefined;
-        }
-        for (const folder of ws) {
-            if (folder.uri.scheme === "file") {
-                const folderPath = folder.uri.path;
+        if (!workspace || !ws) return undefined;
 
-                const possibleFile = path.join(folderPath, sdir);
-                if (features.isFile(possibleFile)) {
-                    const stat4srcMs = features.getFileModTimeStamp(possibleFile);
-                    if (sdirMs === stat4srcMs) {
-                        return possibleFile;
-                    }
+        for (const folder of ws) {
+            if (folder.uri.scheme !== "file") continue;
+
+            const possibleFile = path.join(folder.uri.fsPath, sdir);
+            if (features.isFile(possibleFile)) {
+                const modTime = features.getFileModTimeStamp(possibleFile);
+                if (sdirMs === modTime) {
+                    return possibleFile;
                 }
             }
         }
-
         return undefined;
     }
 
-    public static getShortWorkspaceFilename(schema: string, ddir: string, config: ICOBOLSettings): string | undefined {
-        // if schema is untitle, we treat it as a non-workspace file, so it is never cached
-        if (schema === "untitled") {
-            return undefined;
-        }
+    public static getShortWorkspaceFilename(
+        schema: string,
+        ddir: string,
+        config: ICOBOLSettings
+    ): string | undefined {
+        if (schema === "untitled") return undefined;
+
         const ws = VSWorkspaceFolders.get(config);
-        if (workspace === undefined || ws === undefined) {
-            return undefined;
-        }
+        if (!workspace || !ws) return undefined;
 
         const fullPath = Uri.file(ddir).fsPath;
-        let bestShortName = "";
+        let bestShortName: string | undefined;
+
         for (const folder of ws) {
-            if (folder.uri.scheme === schema) {
-                const folderPath = folder.uri.path;
-                if (fullPath.startsWith(folderPath)) {
-                    const possibleShortPath = fullPath.substring(1 + folderPath.length);
-                    if (bestShortName.length === 0) {
-                        bestShortName = possibleShortPath;
-                    } else {
-                        if (possibleShortPath.length < possibleShortPath.length) {
-                            bestShortName = possibleShortPath;
-                        }
-                    }
+            if (folder.uri.scheme !== schema) continue;
+
+            const folderPath = folder.uri.fsPath;
+            if (fullPath.startsWith(folderPath)) {
+                const relativePath = fullPath.substring(folderPath.length + 1);
+                if (!bestShortName || relativePath.length < bestShortName.length) {
+                    bestShortName = relativePath;
                 }
             }
         }
-
-        return bestShortName.length === 0 ? undefined : bestShortName;
+        return bestShortName;
     }
 
+    /**
+     * Generic implementation for copybook finding
+     */
+    private static async findCopyBookGeneric(
+        filename: string,
+        dirs: string[],
+        extensions: string[],
+        features: IExternalFeatures,
+        inDirectory = "",
+        useAsync = false,
+        isURL = false
+    ): Promise<string> {
+        if (!filename) return "";
+
+        const hasDot = filename.includes(".");
+        for (const baseDir of dirs) {
+            const dir = inDirectory ? path.posix.join(baseDir, inDirectory) : baseDir;
+
+            // Build candidate paths
+            const candidates: string[] = [];
+            if (isURL) {
+                candidates.push(`${dir}/${filename}`);
+                if (!hasDot) {
+                    for (const ext of extensions) {
+                        candidates.push(`${dir}/${filename}.${ext}`);
+                    }
+                }
+            } else {
+                candidates.push(path.join(dir, filename));
+                if (!hasDot) {
+                    for (const ext of extensions) {
+                        candidates.push(path.join(dir, `${filename}.${ext}`));
+                    }
+                }
+            }
+
+            // Test candidates
+            for (const candidate of candidates) {
+                if (useAsync) {
+                    if (await features.isFileASync(candidate)) return candidate;
+                } else {
+                    if (features.isFile(candidate)) return candidate;
+                }
+            }
+        }
+        return "";
+    }
+
+    // Local (sync) versions
     public static findCopyBook(filename: string, config: IVSCOBOLSettings, features: IExternalFeatures): string {
-        if (!filename) {
-            return "";
-        }
-
-        const hasDot = filename.indexOf(".");
-
-        for (const copybookdir of config.file_search_directory) {
-
-            /* check for the file as is.. */
-            const firstPossibleFile = path.join(copybookdir, filename);
-            if (features.isFile(firstPossibleFile)) {
-                return firstPossibleFile;
-            }
-
-            /* no extension? */
-            if (hasDot === -1) {
-                // search through the possible extensions
-                for (const ext of config.copybookexts) {
-                    const possibleFile = path.join(copybookdir, filename + "." + ext);
-
-                    if (features.isFile(possibleFile)) {
-                        return possibleFile;
-                    }
-                }
-            }
-        }
-
-        return "";
+        return (this.findCopyBookGeneric(
+            filename,
+            config.file_search_directory,
+            config.copybookexts,
+            features,
+            "",
+            false,
+            false
+        ) as unknown) as string;
     }
 
-    public static findCopyBookInDirectory(filename: string, inDirectory: string, config: IVSCOBOLSettings, features: IExternalFeatures): string {
-        if (!filename) {
-            return "";
-        }
-
-        const hasDot = filename.indexOf(".");
-
-        for (const baseCopybookdir of config.file_search_directory) {
-            const copybookdir = path.join(baseCopybookdir, inDirectory);
-
-            /* check for the file as is.. */
-            const firstPossibleFile = path.join(copybookdir, filename);
-            if (features.isFile(firstPossibleFile)) {
-                return firstPossibleFile;
-            }
-
-            /* no extension? */
-            if (hasDot === -1) {
-                // search through the possible extensions
-                for (const ext of config.copybookexts) {
-                    const possibleFile = path.join(copybookdir, filename + "." + ext);
-
-                    if (features.isFile(possibleFile)) {
-                        return possibleFile;
-                    }
-                }
-            }
-
-        }
-
-        return "";
+    public static findCopyBookInDirectory(
+        filename: string,
+        inDirectory: string,
+        config: IVSCOBOLSettings,
+        features: IExternalFeatures
+    ): string {
+        return (this.findCopyBookGeneric(
+            filename,
+            config.file_search_directory,
+            config.copybookexts,
+            features,
+            inDirectory,
+            false,
+            false
+        ) as unknown) as string;
     }
 
-    public static async findCopyBookViaURL(filename: string, config: ICOBOLSettings, features: IExternalFeatures): Promise<string> {
-        if (!filename) {
-            return "";
-        }
-
-        const hasDot = filename.indexOf(".");
-
-        for (const copybookdir of features.getURLCopyBookSearchPath()) {
-
-            /* check for the file as is.. */
-            const firstPossibleFile = Uri.parse(copybookdir+"/"+filename);
-            if (await features.isFileASync(firstPossibleFile.toString())) {
-                return firstPossibleFile.toString();
-            }
-
-            /* no extension? */
-            if (hasDot === -1) {
-                // search through the possible extensions
-                for (const ext of config.copybookexts) {
-                    const possibleFile = Uri.parse(copybookdir+"/"+filename + "." + ext);
-
-                    if (await features.isFileASync(possibleFile.toString())) {
-                        return possibleFile.toString();
-                    }
-                }
-            }
-        }
-
-        return "";
+    // Remote (async) versions
+    public static async findCopyBookViaURL(
+        filename: string,
+        config: ICOBOLSettings,
+        features: IExternalFeatures
+    ): Promise<string> {
+        return this.findCopyBookGeneric(
+            filename,
+            features.getURLCopyBookSearchPath(),
+            config.copybookexts,
+            features,
+            "",
+            true,
+            true
+        );
     }
 
-    public static async findCopyBookInDirectoryViaURL(filename: string, inDirectory: string, config: ICOBOLSettings, features: IExternalFeatures): Promise<string> {
-        if (!filename) {
-            return "";
-        }
-
-        const hasDot = filename.indexOf(".");
-
-        for (const baseCopybookdir of features.getURLCopyBookSearchPath()) {
-            const copybookdir = baseCopybookdir+"/"+inDirectory;
-
-            /* check for the file as is.. */
-            const firstPossibleFile =  Uri.parse(copybookdir+"/"+filename);
-            if (await features.isFileASync(firstPossibleFile.toString())) {
-                return firstPossibleFile.toString();
-            }
-
-            /* no extension? */
-            if (hasDot === -1) {
-                // search through the possible extensions
-                for (const ext of config.copybookexts) {
-                    const possibleFile =  Uri.parse(copybookdir+"."+filename + "." + ext);
-
-                    if (await features.isFileASync(possibleFile.toString())) {
-                        return possibleFile.toString();
-                    }
-                }
-            }
-        }
-
-        return "";
+    public static async findCopyBookInDirectoryViaURL(
+        filename: string,
+        inDirectory: string,
+        config: ICOBOLSettings,
+        features: IExternalFeatures
+    ): Promise<string> {
+        return this.findCopyBookGeneric(
+            filename,
+            features.getURLCopyBookSearchPath(),
+            config.copybookexts,
+            features,
+            inDirectory,
+            true,
+            true
+        );
     }
 
-    public static extractSelectionToCopybook(activeTextEditor: TextEditor, features: IExternalFeatures): void {
+    public static extractSelectionToCopybook(
+        activeTextEditor: TextEditor,
+        features: IExternalFeatures
+    ): void {
         const sel = activeTextEditor.selection;
-
         const ran = new Range(sel.start, sel.end);
         const text = activeTextEditor.document.getText(ran);
         const dir = path.dirname(activeTextEditor.document.fileName);
 
         window.showInputBox({
             prompt: "Copybook name?",
-            validateInput: (copybook_filename: string): string | undefined => {
-                if (!copybook_filename || copybook_filename.indexOf(" ") !== -1 ||
-                    copybook_filename.indexOf(".") !== -1 ||
-                    features.isFile(path.join(dir, copybook_filename + ".cpy"))) {
-                    return "Invalid copybook";
-                } else {
-                    return undefined;
-                }
+            validateInput: (copybookFilename: string): string | undefined => {
+                const invalid =
+                    !copybookFilename ||
+                    /\s|\./.test(copybookFilename) ||
+                    features.isFile(path.join(dir, `${copybookFilename}.cpy`));
+                return invalid ? "Invalid copybook" : undefined;
             }
-        }).then(copybook_filename => {
-            // leave if we have no filename
-            if (copybook_filename === undefined) {
-                return;
-            }
-            const filename = path.join(dir, copybook_filename + ".cpy");
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        }).then(copybookFilename => {
+            if (!copybookFilename) return;
+
+            const filename = path.join(dir, `${copybookFilename}.cpy`);
             fs.writeFileSync(filename, text);
             activeTextEditor.edit(edit => {
-                edit.replace(ran, "           copy \"" + copybook_filename + ".cpy\".");
+                edit.replace(ran, `           copy "${copybookFilename}.cpy".`);
             });
-
         });
     }
 
     public static getBestWorkspaceFolder(workspaceDirectory: string): WorkspaceFolder | undefined {
         const workspaces = workspace.workspaceFolders;
-        if (!workspaces) {
-            return undefined;
-        }
+        if (!workspaces) return undefined;
 
-        let bestWorkspace: WorkspaceFolder | undefined = undefined;
-        for (const workspace of workspaces) {
-            if (workspace.uri.fsPath.startsWith(workspaceDirectory)) {
-                bestWorkspace = workspace;
-            }
-        }
-        return bestWorkspace;
+        // Pick the deepest matching workspace
+        return workspaces
+            .filter(ws => workspaceDirectory.startsWith(ws.uri.fsPath))
+            .sort((a, b) => b.uri.fsPath.length - a.uri.fsPath.length)[0];
     }
 }
-
