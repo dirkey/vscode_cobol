@@ -48,7 +48,7 @@ import { VSHoverProvider } from "./vshoverprovider";
 import { COBOLTypeFormatter } from "./vsformatter";
 import { TabUtils } from "./tabstopper";
 import { VSTerminal } from "./vsterminals";
-import { VSHelpAndFeedback } from "./feedbacktree";
+import { VSHelpAndFeedback } from "./views/feedbacktree";
 
 export const progressStatusBarItem: StatusBarItem = window.createStatusBarItem(StatusBarAlignment.Left);
 

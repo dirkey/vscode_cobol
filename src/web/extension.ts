@@ -24,7 +24,7 @@ import { VSWorkspaceFolders } from "../vscobolfolders";
 import { VSSourceTreeViewHandler } from "../vssourceviewtree";
 import { VSHoverProvider } from "../vshoverprovider";
 import { CobolReferenceProvider } from "../vsreferenceprovider";
-import { VSHelpAndFeedback } from "../feedbacktree";
+import { VSHelpAndFeedback } from "../views/feedbacktree";
 
 const URLSearchDirectory: string[] = [];
 let invalidSearchDirectory: string[] = [];
