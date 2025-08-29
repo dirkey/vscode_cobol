@@ -6,138 +6,117 @@ import { ICOBOLSettings } from "./iconfiguration";
 import { VSCOBOLConfiguration } from "./vsconfiguration";
 
 interface BldScriptDefinition extends vscode.TaskDefinition {
-	arguments: string;
+    arguments: string;
 }
 
 export class BldScriptTaskProvider implements vscode.TaskProvider {
-	static scriptPlatform = COBOLFileUtils.isWin32 ? "Windows Batch" : "Unix Script";
+    private bldScriptPromise?: Thenable<vscode.Task[]>;
 
-	static BldScriptType = "COBOLBuildScript";
-	static BldSource = `${BldScriptTaskProvider.scriptPlatform} File`;
+    static readonly scriptPlatform = COBOLFileUtils.isWin32 ? "Windows Batch" : "Unix Script";
+    static readonly BldScriptType = "COBOLBuildScript";
+    static readonly BldSource = `${BldScriptTaskProvider.scriptPlatform} File`;
+    private static readonly scriptName = COBOLFileUtils.isWin32 ? "bld.bat" : "./bld.sh";
+    public static readonly scriptPrefix = COBOLFileUtils.isWin32 ? "cmd.exe /c " : "";
 
-	private bldScriptPromise: Thenable<vscode.Task[]> | undefined = undefined;
+    public provideTasks(): Thenable<vscode.Task[]> | undefined {
+        if (!vscode.workspace.isTrusted) return;
 
-	private static scriptName = COBOLFileUtils.isWin32 ? "bld.bat" : "./bld.sh";
-	public static scriptPrefix = COBOLFileUtils.isWin32 ? "cmd.exe /c " : "";
+        const settings = VSCOBOLConfiguration.get_workspace_settings();
+        const scriptFile = this.getFileFromWorkspace(settings);
+        if (!scriptFile) return;
 
+        if (!this.bldScriptPromise) {
+            this.bldScriptPromise = createBldScriptTasks(scriptFile);
+        }
+        return this.bldScriptPromise;
+    }
 
-	public provideTasks(): Thenable<vscode.Task[]> | undefined {
-		if (!vscode.workspace.isTrusted) {
-			return undefined;
-		}
+    public resolveTask(task: vscode.Task): vscode.Task | undefined {
+        if (!vscode.workspace.isTrusted) return;
 
-		const settings = VSCOBOLConfiguration.get_workspace_settings();
-		const scriptFilename = this.getFileFromWorkspace(settings);
-		if (scriptFilename === undefined) {
-			return undefined;
+        const settings = VSCOBOLConfiguration.get_workspace_settings();
+        const scriptFile = this.getFileFromWorkspace(settings);
+        if (!scriptFile) return;
 
-		}
-		if (!this.bldScriptPromise) {
-			this.bldScriptPromise = getBldScriptTasks(scriptFilename);
-		}
-		return this.bldScriptPromise;
-	}
+        const definition = task.definition as BldScriptDefinition;
+        if (!definition.task) return;
 
-	public static getSHEOptions(scriptName: string): vscode.ShellExecutionOptions {
+        const she = new vscode.ShellExecution(
+            `${BldScriptTaskProvider.scriptPrefix}${scriptFile} ${definition.arguments}`,
+            BldScriptTaskProvider.getSHEOptions(scriptFile)
+        );
 
-		const sheOpts: vscode.ShellExecutionOptions = {
-			cwd: dirname(scriptName),
-		};
+        const resolvedTask = new vscode.Task(
+            definition.task,
+            vscode.TaskScope.Workspace,
+            BldScriptTaskProvider.BldSource,
+            BldScriptTaskProvider.BldScriptType,
+            she,
+            BldScriptTaskProvider.getProblemMatchers()
+        );
 
-		return sheOpts;
-	}
+        const dname = path.dirname(scriptFile);
+        const fname = `${scriptFile.substring(dname.length + 1)} (in ${dname})`;
+        task.detail = `Execute ${fname}`;
 
-	public static getProblemMatchers(): string[] {
-		const matchers = 	[];
-		const envACUCOBOL = process.env["ACUCOBOL"];
-		const envCOBDIR = process.env["COBDIR"];
-		const envCOBOLIT = process.env["COBOLITDIR"];
+        return resolvedTask;
+    }
 
-		if (envACUCOBOL !== undefined) {
-			matchers.push("$acucobol-ccbl");
-		}
+		private getFileFromWorkspace(settings: ICOBOLSettings): string | undefined {
+				const folders = VSWorkspaceFolders.get(settings);
+				if (!folders) return undefined;
 
-		if (envCOBDIR !== undefined) {
-			matchers.push("$mfcobol-errformat3");
-		}
+				for (const folder of folders) {
+						if (folder.uri.scheme !== "file") continue;
 
-		if (envCOBOLIT !== undefined) {
-			matchers.push("$cobolit-cobc");
-		}
-
-		return matchers;
-	}
-
-	public resolveTask(_task: vscode.Task): vscode.Task | undefined {
-		if (!vscode.workspace.isTrusted) {
-			return undefined;
-		}
-
-		const settings = VSCOBOLConfiguration.get_workspace_settings();
-		const scriptName = this.getFileFromWorkspace(settings);
-
-		// does this workspace have a bld.sh or bld.bat
-		if (scriptName === undefined) {
-			return undefined;
-		}
-
-		const task = _task.definition.task;
-
-		if (task) {
-			// resolveTask requires that t1he same definition object be used.
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const definition: BldScriptDefinition = <any>_task.definition;
-
-			const she = new vscode.ShellExecution(`${BldScriptTaskProvider.scriptPrefix}${scriptName} ${definition.arguments}`, BldScriptTaskProvider.getSHEOptions(scriptName));
-			const rtask = new vscode.Task(definition.task, vscode.TaskScope.Workspace, BldScriptTaskProvider.BldSource, BldScriptTaskProvider.BldScriptType, she, BldScriptTaskProvider.getProblemMatchers());
-			const dname = path.dirname(scriptName);
-			const fname = `${scriptName.substring(1 + dname.length)} (in ${dname})`;
-			task.detail = `Execute ${fname}`;
-			return rtask;
-		}
-
-		return undefined;
-	}
-
-	private getFileFromWorkspace(settings: ICOBOLSettings): string | undefined {
-		const ws = VSWorkspaceFolders.get(settings);
-		if (ws !== undefined) {
-			for (const folder of ws) {
-				if (folder.uri.scheme === "file") {
-					const scriptName = BldScriptTaskProvider.scriptName;
-					const fname = path.join(folder.uri.fsPath, scriptName);
-
-					try {
-						if (COBOLFileUtils.isFile(fname)) {
-							return fname;
+						const fullPath = path.join(folder.uri.fsPath, BldScriptTaskProvider.scriptName);
+						try {
+								if (COBOLFileUtils.isFile(fullPath)) return fullPath;
+						} catch {
+								continue;
 						}
-					}
-					catch {
-						// continue
-					}
 				}
-			}
+
+				return undefined; // <- explicit fallback for TypeScript
 		}
 
-		return undefined;
-	}
+    public static getSHEOptions(scriptPath: string): vscode.ShellExecutionOptions {
+        return { cwd: dirname(scriptPath) };
+    }
+
+    public static getProblemMatchers(): string[] {
+        const matchers: string[] = [];
+        if (process.env.ACUCOBOL) matchers.push("$acucobol-ccbl");
+        if (process.env.COБDIR) matchers.push("$mfcobol-errformat3");
+        if (process.env.COBOLITDIR) matchers.push("$cobolit-cobc");
+        return matchers;
+    }
 }
 
-async function getBldScriptTasks(scriptName: string): Promise<vscode.Task[]> {
-	const result: vscode.Task[] = [];
+async function createBldScriptTasks(scriptFile: string): Promise<vscode.Task[]> {
+    const she = new vscode.ShellExecution(
+        `${BldScriptTaskProvider.scriptPrefix}${scriptFile}`,
+        BldScriptTaskProvider.getSHEOptions(scriptFile)
+    );
 
-	const she = new vscode.ShellExecution(`${BldScriptTaskProvider.scriptPrefix}${scriptName}`, BldScriptTaskProvider.getSHEOptions(scriptName));
+    const taskDef: BldScriptDefinition = {
+        type: BldScriptTaskProvider.BldScriptType,
+        arguments: ""
+    };
 
-	const taskDef: BldScriptDefinition = {
-		type: BldScriptTaskProvider.BldScriptType,
-		arguments: ""
-	};
+    const task = new vscode.Task(
+        taskDef,
+        vscode.TaskScope.Workspace,
+        BldScriptTaskProvider.BldSource,
+        BldScriptTaskProvider.BldScriptType,
+        she,
+        BldScriptTaskProvider.getProblemMatchers()
+    );
 
-	const task = new vscode.Task(taskDef, vscode.TaskScope.Workspace,  BldScriptTaskProvider.BldSource, BldScriptTaskProvider.BldScriptType, she, BldScriptTaskProvider.getProblemMatchers());
-	const dname = path.dirname(scriptName);
-	const fname = scriptName.substring(1 + dname.length);
-	task.detail = `Execute ${fname}`;
-	task.group = vscode.TaskGroup.Build;
-	result.push(task);
-	return result;
+    const dname = path.dirname(scriptFile);
+    const fname = scriptFile.substring(dname.length + 1);
+    task.detail = `Execute ${fname}`;
+    task.group = vscode.TaskGroup.Build;
+
+    return [task];
 }

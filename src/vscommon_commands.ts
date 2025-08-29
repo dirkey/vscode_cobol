@@ -594,23 +594,23 @@ export function activateCommonCommands(context: vscode.ExtensionContext) {
     }));
 
     context.subscriptions.push(commands.registerCommand("cobolplugin.move2pd", function () {
-        COBOLProgramCommands.move2pd();
+        COBOLProgramCommands.moveToProcedureDivision();
     }));
 
     context.subscriptions.push(commands.registerCommand("cobolplugin.move2dd", function () {
-        COBOLProgramCommands.move2dd();
+        COBOLProgramCommands.moveToDataDivision();
     }));
 
     context.subscriptions.push(commands.registerCommand("cobolplugin.move2ws", function () {
-        COBOLProgramCommands.move2ws();
+        COBOLProgramCommands.moveToWorkingStorage();
     }));
 
     context.subscriptions.push(commands.registerCommand("cobolplugin.move2anyforward", function () {
-        COBOLProgramCommands.move2anyforward();
+        COBOLProgramCommands.moveForward();
     }));
 
     context.subscriptions.push(commands.registerCommand("cobolplugin.move2anybackwards", function () {
-        COBOLProgramCommands.move2anybackwards();
+        COBOLProgramCommands.moveBackward();
     }));
 
     context.subscriptions.push(commands.registerCommand("cobolplugin.tab", async function () {

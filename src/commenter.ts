@@ -1,157 +1,63 @@
 "use strict";
 
-import { Position, Range, TextDocument, TextEditor, TextEditorEdit, Selection, window } from "vscode";
+import { Position, Range, TextDocument, TextEditorEdit, window } from "vscode";
 import { ESourceFormat } from "./externalfeatures";
 import { VSCOBOLSourceScanner } from "./vscobolscanner";
 import { ICOBOLSettings } from "./iconfiguration";
 
 export class commentUtils {
-    private static commentLine(editor: TextEditor, doc: TextDocument, sel: readonly Selection[], format: ESourceFormat) {
+    static readonly var_free_insert_at_comment_column = true;
+
+    public static processCommentLine(settings: ICOBOLSettings): void {
+        const editor = window.activeTextEditor;
+        if (!editor) return;
+
+        const doc = editor.document;
+        const format = VSCOBOLSourceScanner.getCachedObject(doc, settings)?.sourceFormat ?? ESourceFormat.variable;
+
         editor.edit(edit => {
-            for (let x = 0; x < sel.length; x++) {
-                if (sel[x].start.line === sel[x].end.line) {
-                    const position = sel[x].start;
-                    commentUtils.toggleLine(edit, doc, position.line, format);
-                } else {
-                    commentUtils.multipleToggleLine(edit, doc, sel[x], format);
+            for (const sel of editor.selections) {
+                for (let line = sel.start.line; line <= sel.end.line; line++) {
+                    commentUtils.toggleLine(edit, doc, line, format);
                 }
             }
         });
     }
 
-    static readonly var_free_insert_at_comment_column = true;
+    private static toggleLine(edit: TextEditorEdit, doc: TextDocument, lineNum: number, format: ESourceFormat) {
+        const text = doc.lineAt(lineNum).text;
 
-    private static toggleLine(editor: TextEditorEdit, d: TextDocument, l: number, format: ESourceFormat) {
-        const line = d.lineAt(l);
-        const lineContents = line.text;
-
-        switch (format) {
-            case ESourceFormat.terminal:
-                {
-                    const firstInlineIndex = lineContents.indexOf("|");
-                    if (firstInlineIndex !== -1) {
-                        const r = new Range(new Position(l, firstInlineIndex), new Position(l, 2 + firstInlineIndex));
-                        editor.delete(r);
-                        return;
-                    }
-                    let defpos = -1;
-                    for (let w = 0; w < lineContents.length; w++) {
-                        if (lineContents[w] === " ") {
-                            defpos++;
-                        }
-                        else {
-                            break;
-                        }
-                    }
-
-                    if (defpos !== -1) {
-                        editor.insert(new Position(l, 1 + defpos), "| ");
-                        return;
-                    }
-
-                    editor.insert(new Position(l, 0), "| ");
-                    return;
-                }
-
-            case ESourceFormat.fixed:
-                {
-                    /* remove * from column 6 */
-                    if (lineContents.length > 6 &&
-                        (lineContents[6] === "*" || lineContents[6] === "/")) {
-                        const r = new Range(new Position(l, 6), new Position(l, 7));
-                        editor.replace(r, " ");
-                        return;
-                    }
-
-                    if (lineContents.length > 6 && lineContents[6] === " ") {
-                        const r = new Range(new Position(l, 6), new Position(l, 7));
-                        editor.replace(r, "*");
-                        return;
-                    }
-                    return;
-                }
-            case ESourceFormat.free:
-            case ESourceFormat.variable:
-                {
-                    let firstInlineIndex = lineContents.indexOf("*> ");
-                    if (firstInlineIndex !== -1 && firstInlineIndex !== 6) {
-                        const r = new Range(new Position(l, firstInlineIndex), new Position(l, 3 + firstInlineIndex));
-                        editor.delete(r);
-                        return;
-                    }
-
-                    firstInlineIndex = lineContents.indexOf("*>");
-                    if (firstInlineIndex !== -1) {
-                        const r = new Range(new Position(l, firstInlineIndex), new Position(l, 2 + firstInlineIndex));
-                        editor.delete(r);
-                        return;
-                    }
-
-                    let defpos = -1;
-                    for (let w = 0; w < lineContents.length; w++) {
-                        if (lineContents[w] === " ") {
-                            defpos++;
-                        }
-                        else {
-                            break;
-                        }
-                    }
-
-                    if (defpos !== -1) {
-                        // if we have a fixed column comment, convert it..
-                        if (defpos === 5 && lineContents[6] === "*") {
-                            editor.insert(new Position(l, 7), "> ");
-                            return;
-                        }
-
-                        // we can use the comment column
-                        if (defpos === 6) {   // defpos started at -1....
-                            editor.insert(new Position(l, 6), "*>");
-                            return;
-                        }
-
-                        if (commentUtils.var_free_insert_at_comment_column && defpos > 6) {
-                            if (lineContents[6] === " " && lineContents[7] === " " && lineContents[8] === " ") {
-                                editor.insert(new Position(l, 6), "*>");
-                                return;
-                            }
-                        }
-
-                        editor.insert(new Position(l, 1 + defpos), "*> ");
-                        return;
-                    }
-
-                    if (lineContents.length > 6 && lineContents[6] === " " && lineContents[7] === " ") {
-                        const r = new Range(new Position(l, 6), new Position(l, 8));
-                        editor.replace(r, "*>");
-                        return;
-                    }
-
-                    editor.insert(new Position(l, 0), "*> ");
-                    return;
-                }
+        if (format === ESourceFormat.fixed) {
+            // Toggle '*' at column 6
+            const replaceRange = new Range(new Position(lineNum, 6), new Position(lineNum, 7));
+            edit.replace(replaceRange, text[6] === "*" || text[6] === "/" ? " " : "*");
+            return;
         }
-    }
 
-    private static multipleToggleLine(edit: TextEditorEdit, d: TextDocument, sel: Selection, format: ESourceFormat) {
-        for (let line = sel.start.line; line <= sel.end.line; line++) {
-            commentUtils.toggleLine(edit, d, line, format);
+        const token = format === ESourceFormat.terminal ? "|" : "*> ";
+        const existingIndex = text.indexOf(token);
+        if (existingIndex >= 0) {
+            const deleteRange = new Range(new Position(lineNum, existingIndex), new Position(lineNum, existingIndex + token.length));
+            edit.delete(deleteRange);
+            return;
         }
-    }
 
-    public static processCommentLine(settings: ICOBOLSettings): void {
-        const editor = window.activeTextEditor;
-        if (editor) {
-            const doc = editor.document;
-            const sels = editor.selections;
-            let sourceformatStyle: ESourceFormat = ESourceFormat.variable;
+        const firstNonSpace = text.search(/\S|$/);
+        let insertPos = 0;
 
-            const gcp = VSCOBOLSourceScanner.getCachedObject(doc, settings);
-            if (gcp !== undefined) {
-                sourceformatStyle = gcp.sourceFormat;
-            }
-
-            commentUtils.commentLine(editor, doc, sels, sourceformatStyle);
+        if (token === "|") {
+            insertPos = Math.max(0, firstNonSpace);
+        } else if (
+            firstNonSpace === 6 ||
+            (this.var_free_insert_at_comment_column && firstNonSpace > 6 && text.slice(6, 9) === "   ")
+        ) {
+            insertPos = 6;
+        } else if (firstNonSpace === 5 && text[6] === "*") {
+            insertPos = 7;
+        } else {
+            insertPos = Math.max(0, firstNonSpace - 1);
         }
+
+        edit.insert(new Position(lineNum, insertPos), token);
     }
 }

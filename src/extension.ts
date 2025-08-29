@@ -43,23 +43,12 @@ import { SnippetCompletionItemProvider } from "./vssnippetprovider";
 import { ExtensionDefaults } from "./extensionDefaults";
 import { VSCobolRenameProvider } from "./vsrenameprovider";
 import { activateCommonCommands, checkForExtensionConflicts, install_call_hierarchy, isMicroFocusCOBOL_LSPActive, toggleMicroFocusLSP } from "./vscommon_commands";
-import { VSHelpAndFeedViewHandler } from "./feedbacktree";
 import { VSCustomIntelliseRules } from "./vscustomrules";
 import { VSHoverProvider } from "./vshoverprovider";
 import { COBOLTypeFormatter } from "./vsformatter";
 import { TabUtils } from "./tabstopper";
 import { VSTerminal } from "./vsterminals";
-
-// import type MarkdownIt from 'markdown-it';
-// import hijs from 'highlight.js/lib/core';
-
-// try {
-//     // hijs.registerLanguage('COBOL', hljsCOBOL);
-//     hijs.registerLanguage('shell', require('highlight.js/lib/languages/shell'));
-//     hijs.registerLanguage('COBOL', require('highlightjs-cobol'));
-// } catch {
-//     //
-// }
+import { VSHelpAndFeedback } from "./feedbacktree";
 
 export const progressStatusBarItem: StatusBarItem = window.createStatusBarItem(StatusBarAlignment.Left);
 
@@ -577,7 +566,7 @@ export async function activate(context: ExtensionContext) {
     }
 
     await VSSourceTreeViewHandler.setupSourceViewTree(settings, false);
-    VSHelpAndFeedViewHandler.setupSourceViewTree(settings, false);
+    new VSHelpAndFeedback()
     context.subscriptions.push(COBOLTypeFormatter.register(settings));
 
     context.subscriptions.push(languages.registerDefinitionProvider(VSExtensionUtils.getAllCobolSelectors(settings, true), {
@@ -730,35 +719,6 @@ export async function activate(context: ExtensionContext) {
         vscode.commands.executeCommand("setContext", "cobolplugin.enableStorageAlign", false);
     })
 
-    // vscode.languages.registerSignatureHelpProvider(VSExtensionUtils.getAllCobolSelectors(settings), new class implements vscode.SignatureHelpProvider {
-    //     provideSignatureHelp(
-    //         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    //         document: vscode.TextDocument,
-    //         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    //         position: vscode.Position,
-    //         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    //         token: vscode.CancellationToken,
-    //         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    //         context: vscode.SignatureHelpContext
-    //     ): vscode.ProviderResult<vscode.SignatureHelp> {
-
-    //         // console.log(context.activeSignatureHelp);
-
-    //         // Return fake signature help result
-    //         const sigHelp = new vscode.SignatureHelp();
-    //         sigHelp.activeParameter = 0;
-    //         sigHelp.activeSignature = 0;
-    //         sigHelp.signatures = [
-    //             new vscode.SignatureInformation("1", "Paramter 1"),
-    //             new vscode.SignatureInformation("2")
-    //         ];
-    //         return sigHelp;
-    //     }
-    // }, {
-    //     triggerCharacters: ["by"],
-    //     retriggerCharacters: [","]
-    // });
-
     let toggleDone = false;
     for (const vte of vscode.window.visibleTextEditors) {
         // update document decorations
@@ -794,12 +754,6 @@ export async function activate(context: ExtensionContext) {
     openChangeLog(context);
 
     updateDecorationsOnTextEditorEnabled = true;
-
-    //     return {
-    //         extendMarkdownIt(md: MarkdownIt) {
-    //             return md.use(require('markdown-it-highlightjs/core'), {hijs});
-    //         }
-    //     };
 }
 
 export async function deactivateAsync(): Promise<void> {

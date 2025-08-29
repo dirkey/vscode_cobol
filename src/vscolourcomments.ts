@@ -9,68 +9,63 @@ import { VSLogger } from "./vslogger";
 import { VSExternalFeatures } from "./vsexternalfeatures";
 import { ICOBOLSettings } from "./iconfiguration";
 
+interface CommentTagItem {
+    tag: string;
+    color?: string;
+    backgroundColor?: string;
+    strikethrough?: boolean;
+    underline?: boolean;
+    undercurl?: boolean;
+    bold?: boolean;
+    italic?: boolean;
+    reverse?: boolean;
+}
+
 export class ColourTagHandler {
 
-    public setupTags(configElement: string,tags: Map<string, TextEditorDecorationType>): void {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const items = workspace.getConfiguration(ExtensionDefaults.defaultEditorConfig).get(configElement) as any;
-        if (items === undefined) {
-            return;
-        }
+    public setupTags(configElement: string, tags: Map<string, TextEditorDecorationType>): void {
+        const items = workspace.getConfiguration(ExtensionDefaults.defaultEditorConfig).get<CommentTagItem[]>(configElement);
+        if (!items) return;
 
         tags.clear();
 
         for (const item of items) {
             try {
-                const options: DecorationRenderOptions = {};
-
-                if (item.color) {
-                    options.color = item.color;
-                }
-
-                if (item.backgroundColor) {
-                    options.backgroundColor = item.backgroundColor;
-                }
-
-                if (item.strikethrough) {
-                    options.textDecoration = "line-through solid";
-                }
-
-                if (item.underline) {
-                    options.textDecoration += " underline solid";
-                }
-
-                if (item.undercurl) {
-                    options.textDecoration += " underline wavy";
-                }
-
-                if (item.bold) {
-                    options.fontWeight = "bold";
-                }
-
-                if (item.italic) {
-                    options.fontStyle = "italic";
-                }
-
-                if (item.reverse) {
-                    options.backgroundColor = new ThemeColor("editor.foreground");
-                    options.color = new ThemeColor("editor.background");
-                }
-
-                const decl = window.createTextEditorDecorationType(options);
-                const tag = item.tag as string;
-                tags.set(tag.toUpperCase(), decl);
+                const options: DecorationRenderOptions = ColourTagHandler.buildDecorationOptions(item);
+                const decoration = window.createTextEditorDecorationType(options);
+                tags.set(item.tag.toUpperCase(), decoration);
             } catch (e) {
                 VSLogger.logException("Invalid comments_tags entry", e as Error);
             }
         }
     }
+
+    private static buildDecorationOptions(item: CommentTagItem): DecorationRenderOptions {
+        const options: DecorationRenderOptions = {};
+
+        if (item.color) options.color = item.color;
+        if (item.backgroundColor) options.backgroundColor = item.backgroundColor;
+
+        const decorations: string[] = [];
+        if (item.strikethrough) decorations.push("line-through solid");
+        if (item.underline) decorations.push("underline solid");
+        if (item.undercurl) decorations.push("underline wavy");
+        if (decorations.length) options.textDecoration = decorations.join(" ");
+
+        if (item.bold) options.fontWeight = "bold";
+        if (item.italic) options.fontStyle = "italic";
+
+        if (item.reverse) {
+            options.backgroundColor = new ThemeColor("editor.foreground");
+            options.color = new ThemeColor("editor.background");
+        }
+
+        return options;
+    }
 }
 
 class CommentColourHandlerImpl extends ColourTagHandler implements ICommentCallback {
-    static readonly emptyCommentDecoration = window.createTextEditorDecorationType({
-        //
-    });
+    static readonly emptyCommentDecoration = window.createTextEditorDecorationType({});
 
     private tags = new Map<string, TextEditorDecorationType>();
 
@@ -80,101 +75,73 @@ class CommentColourHandlerImpl extends ColourTagHandler implements ICommentCallb
     }
 
     public setupTags() {
-        super.setupTags("comments_tags",this.tags);
+        super.setupTags("comments_tags", this.tags);
     }
- 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    processComment(configHandler: ICOBOLSettings, sourceHandler: ISourceHandlerLite, commentLine: string, sourceFilename: string, sourceLineNumber: number, startPos: number, format: ESourceFormat): void {
-        if (!configHandler.enable_comment_tags) {
-            return;
-        }
 
-        const ranges = sourceHandler.getNotedComments();
+    public processComment(
+        configHandler: ICOBOLSettings,
+        sourceHandler: ISourceHandlerLite,
+        commentLine: string,
+        _sourceFilename: string,
+        sourceLineNumber: number,
+        startPos: number,
+        _format: ESourceFormat
+    ): void {
+        if (!configHandler.enable_comment_tags) return;
+
         const commentLineUpper = commentLine.toUpperCase();
-        const comment_tag_word = configHandler.comment_tag_word;
-
-        let lowestTag: commentRange | undefined = undefined;
+        let lowestTag: commentRange | undefined;
         let lowestPos = commentLine.length;
-        for (const [tag,] of this.tags) {
-            const pos = commentLineUpper.indexOf(tag, 1 + startPos);
 
-            if (pos !== -1) {
-                if (pos < lowestPos) {
-                    lowestPos = pos;
-                    if (comment_tag_word) {
-                        lowestTag = new commentRange(sourceLineNumber, pos, tag.length, tag);
-                    } else {
-                        lowestTag = new commentRange(sourceLineNumber, pos, commentLineUpper.length - startPos, tag);
-                    }
-                }
+        for (const tag of this.tags.keys()) {
+            const pos = commentLineUpper.indexOf(tag, startPos + 1);
+            if (pos !== -1 && pos < lowestPos) {
+                lowestPos = pos;
+                lowestTag = new commentRange(
+                    sourceLineNumber,
+                    pos,
+                    configHandler.comment_tag_word ? tag.length : commentLineUpper.length - startPos,
+                    tag
+                );
             }
         }
 
-        // default to left most tag
-        if (lowestTag !== undefined) {
-            ranges.push(lowestTag);
-        }
+        if (lowestTag) sourceHandler.getNotedComments().push(lowestTag);
     }
 
-    // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
     public async updateDecorations(activeTextEditor: TextEditor | undefined) {
-        if (!activeTextEditor) {
-            return;
-        }
+        if (!activeTextEditor) return;
 
         const configHandler = VSCOBOLConfiguration.get_resource_settings(activeTextEditor.document, VSExternalFeatures);
-        if (!configHandler.enable_comment_tags) {
-            return;
-        }
+        if (!configHandler.enable_comment_tags) return;
 
-        // get rid of all decorations
-        const decorationOptions: DecorationOptions[] = [];
-        for (const [, dec] of this.tags) {
-            activeTextEditor.setDecorations(dec, decorationOptions);
+        // Clear all previous decorations
+        const empty: DecorationOptions[] = [];
+        for (const dec of this.tags.values()) {
+            activeTextEditor.setDecorations(dec, empty);
         }
 
         const doc: TextDocument = activeTextEditor.document;
-        const textLanguage: TextLanguage = VSExtensionUtils.isSupportedLanguage(doc);
+        if (VSExtensionUtils.isSupportedLanguage(doc) !== TextLanguage.COBOL) return;
 
-        if (textLanguage !== TextLanguage.COBOL) {
-            return;
+        const scanner = VSCOBOLSourceScanner.getCachedObject(doc, configHandler);
+        if (!scanner) return;
+
+        const decorationsMap = new Map<string, DecorationOptions[]>();
+        for (const range of scanner.sourceHandler.getNotedComments()) {
+            const startPos = new Position(range.startLine, range.startColumn);
+            const endPos = new Position(range.startLine, range.startColumn + range.length);
+            const decoration: DecorationOptions = { range: new Range(startPos, endPos) };
+
+            const key = range.commentStyle.toUpperCase();
+            if (!decorationsMap.has(key)) decorationsMap.set(key, []);
+            decorationsMap.get(key)?.push(decoration);
         }
 
-        const gcp = VSCOBOLSourceScanner.getCachedObject(doc, configHandler);
-        if (gcp !== undefined) {
-            const ranges = gcp.sourceHandler.getNotedComments();
-            const mapOfDecorations = new Map<string, DecorationOptions[]>();
-            for (const range of ranges) {
-                const startPos = new Position(range.startLine, range.startColumn);
-                const endPos = new Position(range.startLine, range.startColumn + range.length);
-                const decoration = { range: new Range(startPos, endPos) };
-
-                if (!mapOfDecorations.has(range.commentStyle)) {
-                    const decorationOptions: DecorationOptions[] = [];
-                    mapOfDecorations.set(range.commentStyle, decorationOptions);
-                }
-
-                const decorationOptions = mapOfDecorations.get(range.commentStyle);
-                if (decorationOptions !== undefined) {
-                    decorationOptions.push(decoration);
-                }
-            }
-
-            for (const [decTagName,] of this.tags) {
-                const decorationOption = mapOfDecorations.get(decTagName);
-                if (decorationOption === undefined) {
-                    const empty: DecorationOptions[] = [];
-                    activeTextEditor.setDecorations(CommentColourHandlerImpl.emptyCommentDecoration, empty);
-                } else {
-                    const dec = this.tags.get(decTagName);
-                    if (dec !== undefined) {
-                        activeTextEditor.setDecorations(dec, decorationOption)
-                    }
-                }
-            }
+        for (const [tag, decorationType] of this.tags) {
+            activeTextEditor.setDecorations(decorationType, decorationsMap.get(tag) ?? []);
         }
     }
 }
 
 export const colourCommentHandler = new CommentColourHandlerImpl();
-

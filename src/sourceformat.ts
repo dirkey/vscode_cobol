@@ -1,62 +1,81 @@
 import { ESourceFormat } from "./externalfeatures";
-import { fileformatStrategy, ICOBOLSettings, IEditorMarginFiles } from "./iconfiguration";
+import { fileformatStrategy, ICOBOLSettings } from "./iconfiguration";
 import { ISourceHandlerLite } from "./isourcehandler";
-
 import globToRegExp = require("glob-to-regexp");
 import { getCOBOLKeywordDictionary } from "./keywords/cobolKeywords";
 
-const inline_sourceformat: string[] = ["sourceformat", ">>source format"];
+const INLINE_SOURCE_FORMAT: string[] = ["sourceformat", ">>source format"];
+
+class LineAnalyzer {
+    public validFixedLine = false;
+    public hasKeywordAtColumn0 = false;
+    public formatDetected?: ESourceFormat;
+
+    constructor(
+        private line: string,
+        private keywords: Set<string>,
+        private isTerminal: boolean
+    ) {
+        this.analyze();
+    }
+
+    private analyze() {
+        const trimmedLine = this.line.trimEnd();
+        if (!trimmedLine) return;
+
+        const lowerLine = trimmedLine.toLowerCase();
+
+        // Fixed line detection
+        this.validFixedLine = lowerLine.length >= 7 && ["*", "D", "/", " ", "-"].includes(lowerLine[6]);
+
+        // Terminal format detection
+        if (this.isTerminal && (lowerLine.startsWith("*") || lowerLine.startsWith("|") || lowerLine.startsWith("\\D"))) {
+            this.formatDetected = ESourceFormat.terminal;
+            return;
+        }
+
+        // Inline source format detection
+        for (const token of INLINE_SOURCE_FORMAT) {
+            const idx = lowerLine.indexOf(token);
+            if (idx !== -1) {
+                const remainder = lowerLine.substring(idx + token.length + 1);
+                if (remainder.includes("fixed")) this.formatDetected = ESourceFormat.fixed;
+                else if (remainder.includes("variable")) this.formatDetected = ESourceFormat.variable;
+                else if (remainder.includes("free")) this.formatDetected = ESourceFormat.free;
+                return;
+            }
+        }
+
+        // Free/variable heuristics
+        if (lowerLine.includes("*>")) {
+            this.formatDetected = ESourceFormat.variable;
+            return;
+        }
+
+        if (!this.validFixedLine && lowerLine.length > 80) {
+            this.formatDetected = ESourceFormat.variable;
+            return;
+        }
+
+        // Keyword detection
+        let firstWord = lowerLine.split(" ")[0].replace(/\.$/, "");
+        if (firstWord && this.keywords.has(firstWord)) this.hasKeywordAtColumn0 = true;
+    }
+}
 
 export class SourceFormat {
-
-    private static isValidFixedLine(line: string): boolean {
-        if (line.length >= 7) {
-            switch (line[6]) {
-                case "*": return true;
-                case "D": return true;
-                case "/": return true;
-                case " ": return true;
-                case "-": return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static isNumber(value: string | number): boolean {
-        if (value.toString().length === 0) {
-            return false;
-        }
-        return !isNaN(Number(value.toString()));
-    }
-
     private static getFileFormat(doc: ISourceHandlerLite, config: ICOBOLSettings): ESourceFormat | undefined {
-        const filesFilter = config.editor_margin_files;
-        if (filesFilter.length >= 1) {
-            const docFilename: string = doc.getFilename();
-            for (let i = 0; i < filesFilter.length; i++) {
-                try {
-                    const filter: IEditorMarginFiles = filesFilter[i];
-
-                    const re = globToRegExp(filter.pattern, { flags: "i" });
-                    if (re.test(docFilename)) {
-                        return ESourceFormat[filter.sourceformat];
-                    }
-                }
-                catch
-                {
-                    //
-                }
-            }
+        for (const filter of config.editor_margin_files) {
+            try {
+                const re = globToRegExp(filter.pattern, { flags: "i" });
+                if (re.test(doc.getFilename())) return ESourceFormat[filter.sourceformat];
+            } catch {}
         }
-
         return undefined;
     }
 
     public static get(doc: ISourceHandlerLite, config: ICOBOLSettings): ESourceFormat {
-        const langid = doc.getLanguageId();
-
-        // check overrides..
+        // Strategy overrides
         switch (config.fileformat_strategy) {
             case fileformatStrategy.AlwaysFixed: return ESourceFormat.fixed;
             case fileformatStrategy.AlwaysVariable: return ESourceFormat.variable;
@@ -64,155 +83,60 @@ export class SourceFormat {
             case fileformatStrategy.AlwaysTerminal: return ESourceFormat.terminal;
         }
 
-        // check file based overrides..
+        // File-based overrides
         if (config.check_file_format_before_file_scan) {
-            const fileFormat: ESourceFormat | undefined = SourceFormat.getFileFormat(doc, config);
-            if (fileFormat !== undefined) {
-                return fileFormat;
-            }
+            const fileFormat = this.getFileFormat(doc, config);
+            if (fileFormat) return fileFormat;
         }
 
-        var COBOLKeywordDictionary = getCOBOLKeywordDictionary(doc.getLanguageId());
+        const langId = doc.getLanguageId().toLowerCase();
+        const isTerminal = langId === "acucobol";
+        const keywords = new Set(getCOBOLKeywordDictionary(langId).keys());
 
-        // check source for source format
-        let linesWithJustNumbers = 0;
-        let linesWithIdenticalAreaB = 0;
-        const maxLines = doc.getLineCount() > config.pre_scan_line_limit ? config.pre_scan_line_limit : doc.getLineCount();
-        let defFormat = ESourceFormat.unknown;
-
-        const checkForTerminalFormat: boolean = langid.toLocaleLowerCase() === "acucobol" ? true : false;
-        let prevRightMargin = "";
+        let defFormat: ESourceFormat = ESourceFormat.unknown;
         let validFixedLines = 0;
         let invalidFixedLines = 0;
         let skippedLines = 0;
         let linesGT80 = 0;
         let keywordAtColumn0 = 0;
 
+        const maxLines = Math.min(doc.getLineCount(), config.pre_scan_line_limit);
+
         for (let i = 0; i < maxLines; i++) {
-
-            let lineText = doc.getLineTabExpanded(i);
-            if (lineText === undefined) {
-                break;
-            }
-
-            lineText = lineText.trimEnd();
-            if (lineText.length === 0) {
+            const lineText = doc.getLineTabExpanded(i);
+            if (!lineText || !lineText.trim()) {
                 skippedLines++;
                 continue;
             }
 
-            const line = lineText.toLowerCase();
-            const validFixedLine = SourceFormat.isValidFixedLine(line);
-            
-            if (validFixedLine) {
-                validFixedLines++;
-            } else {
-                invalidFixedLines++;
-            }
- 
-            // free
-            const firstSpace = line.indexOf(" ");
-            let firstWord:string = firstSpace == -1 ? line : line.substring(0,firstSpace);
-            if (firstWord.endsWith(".")) {
-                firstWord = firstWord.substring(0, firstWord.length - 1);
-            }
-            if (firstWord.length !== 0 && COBOLKeywordDictionary.has(firstWord))
-            {
-                keywordAtColumn0++;
-            }
-            // acu
-            if (checkForTerminalFormat) {
-                if (line.startsWith("*") || line.startsWith("|") || line.startsWith("\\D")) {
-                    defFormat = ESourceFormat.terminal;
-                }
-            }
+            const analyzer = new LineAnalyzer(lineText, keywords, isTerminal);
 
-            // non-acu
-            if (defFormat === ESourceFormat.unknown && !checkForTerminalFormat) {
-                const newcommentPos = line.indexOf("*>");
-                if (newcommentPos !== -1 && defFormat === ESourceFormat.unknown) {
-                    defFormat = ESourceFormat.variable;
-                    continue;
-                }
+            if (analyzer.formatDetected) return analyzer.formatDetected;
 
-                if (!validFixedLine && line.length > 80) {
-                    defFormat = ESourceFormat.variable;
-                    linesGT80++;
-                    continue;
-                }
-            }
+            analyzer.validFixedLine ? validFixedLines++ : invalidFixedLines++;
+            if (analyzer.hasKeywordAtColumn0) keywordAtColumn0++;
 
-            // does the source say the file format
-            let pos4sourceformat_after = 0;
-            for (let isf = 0; isf < inline_sourceformat.length; isf++) {
-                const pos4sourceformat = line.indexOf(inline_sourceformat[isf]);
-                if (pos4sourceformat !== -1) {
-                    pos4sourceformat_after = pos4sourceformat + inline_sourceformat[isf].length + 1;
-                    break;
-                }
-            }
-
-            // does it contain a inline comments? no
-            if (pos4sourceformat_after === 0) {
-                if (validFixedLine && line.length > 72) {
-                    const rightMargin = line.substring(72).trim();
-
-                    if (prevRightMargin === rightMargin) {
-                        linesWithIdenticalAreaB++;
-                    } else {
-                        if (SourceFormat.isNumber(rightMargin)) {
-                            linesWithJustNumbers++;
-                        }
-                    }
-
-                    prevRightMargin = rightMargin;
-                }
-                continue;
-            }
-
-            // got a inline comment,yes
-            const line2right = line.substring(pos4sourceformat_after);
-            if (line2right.indexOf("fixed") !== -1) {
-                return ESourceFormat.fixed;
-            }
-            if (line2right.indexOf("variable") !== -1) {
-                return ESourceFormat.variable;
-            }
-            if (line2right.indexOf("free") !== -1) {
-                return ESourceFormat.free;
-            }
+            if (!analyzer.validFixedLine && lineText.length > 80) linesGT80++;
         }
 
-        // does it look like free?
-        if (keywordAtColumn0 >= 2 && invalidFixedLines >= 2)
-        {
-            defFormat = checkForTerminalFormat ? ESourceFormat.terminal : ESourceFormat.free;
+        // Heuristics
+        if (keywordAtColumn0 >= 2 && invalidFixedLines >= 2) {
+            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.free;
         }
 
-        // if we cannot be sure, then let the default be variable or terminal
         if (defFormat === ESourceFormat.unknown) {
-            defFormat = checkForTerminalFormat ? ESourceFormat.terminal : ESourceFormat.variable;
+            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.variable;
         }
 
-        if (invalidFixedLines === 0) {
-            if (linesGT80 === 0 && (validFixedLines + skippedLines === maxLines)) {
-                return ESourceFormat.fixed;
-            }
-
-            //it might well be...
-            if (linesWithJustNumbers > 7 || linesWithIdenticalAreaB > 7) {
-                return ESourceFormat.fixed;
-            }
+        if (invalidFixedLines === 0 && linesGT80 === 0 && (validFixedLines + skippedLines === maxLines)) {
+            return ESourceFormat.fixed;
         }
 
-        // original code.. aka a late check
+        // Late file-based override
         if (!config.check_file_format_before_file_scan) {
-            const fileFormat: ESourceFormat | undefined = SourceFormat.getFileFormat(doc, config);
-            if (fileFormat !== undefined) {
-                return fileFormat;
-            }
+            const fileFormat = this.getFileFormat(doc, config);
+            return fileFormat ?? defFormat;
         }
-
 
         return defFormat;
     }

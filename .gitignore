@@ -14,3 +14,4 @@ src/textprovider.ts.bak
 package-lock.json
 *.d.ts
 tsconfig.tsbuildinfo
+.aider*

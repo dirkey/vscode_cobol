@@ -22,9 +22,9 @@ import { VSPPCodeLens } from "../vsppcodelens";
 import { activateCommonCommands, checkForExtensionConflicts } from "../vscommon_commands";
 import { VSWorkspaceFolders } from "../vscobolfolders";
 import { VSSourceTreeViewHandler } from "../vssourceviewtree";
-import { VSHelpAndFeedViewHandler } from "../feedbacktree";
 import { VSHoverProvider } from "../vshoverprovider";
 import { CobolReferenceProvider } from "../vsreferenceprovider";
+import { VSHelpAndFeedback } from "../feedbacktree";
 
 const URLSearchDirectory: string[] = [];
 let invalidSearchDirectory: string[] = [];
@@ -282,7 +282,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
 
     await VSSourceTreeViewHandler.setupSourceViewTree(_settings, false);
-    VSHelpAndFeedViewHandler.setupSourceViewTree(_settings, false);
+    new VSHelpAndFeedback()
     
     /* hover provider */
     context.subscriptions.push(languages.registerHoverProvider(VSExtensionUtils.getAllCobolSelectors(_settings, false), {

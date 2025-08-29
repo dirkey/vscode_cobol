@@ -1,137 +1,93 @@
 "use strict";
 
-import { Range, Selection, TextEditorRevealType, window } from "vscode";
+import { Selection, TextEditorRevealType, window } from "vscode";
 
 export class COBOLProgramCommands {
-    public static move2pd(): void {
-        const line = COBOLProgramCommands.findProcedureDivision();
+
+    private static readonly anyNextPatterns = [
+        /.*\s*division/i,
+        /entry\s*"/i,
+        /.*\s*section\./i,
+        /eject/i,
+        /program-id\./i,
+        /class-id[.|\s]/i,
+        /method-id[.|\s]/i
+    ];
+
+    public static moveToProcedureDivision(): void {
+        this.moveToLine(this.findMatch(/procedure\s*division/i), "PROCEDURE DIVISION");
+    }
+
+    public static moveToDataDivision(): void {
+        let line = this.findMatch(/data\s*division/i) || this.findMatch(/working-storage\s*section/i);
+        this.moveToLine(line, "DATA DIVISION or WORKING-STORAGE SECTION");
+    }
+
+    public static moveToWorkingStorage(): void {
+        this.moveToLine(this.findMatch(/working-storage\s*section/i), "WORKING-STORAGE SECTION");
+    }
+
+    public static moveForward(): void {
+        this.moveAny(1);
+    }
+
+    public static moveBackward(): void {
+        this.moveAny(-1);
+    }
+
+    private static moveToLine(line: number, errorMsg: string): void {
         if (line > 0) {
-            COBOLProgramCommands.goToLine(line);
+            this.goToLine(line);
         } else {
-            window.setStatusBarMessage("ERROR: 'PROCEDURE DIVISION' not found.", 4000);
+            window.setStatusBarMessage(`ERROR: '${errorMsg}' not found.`, 4000);
         }
     }
 
-    public static move2dd(): void {
-        let line = COBOLProgramCommands.findDataDivision();
-        if (line > 0) {
-            COBOLProgramCommands.goToLine(line);
-            return;
-        }
-
-        line = COBOLProgramCommands.findWorkingStorageSection();
-        if (line > 0) {
-            COBOLProgramCommands.goToLine(line);
-            return;
-        }
-
-        window.setStatusBarMessage("ERROR: 'DATA DIVISION' or 'WORKING-STORAGE SECTION' not found.", 4000);
+    private static moveAny(direction: number): void {
+        const line = this.findAnyNext(direction);
+        if (line > 0) this.goToLine(line);
     }
 
-    public static move2ws(): void {
-        const line = COBOLProgramCommands.findWorkingStorageSection();
-        if (line > 0) {
-            COBOLProgramCommands.goToLine(line);
-            return;
-        }
+    private static findMatch(regex: RegExp): number {
+        const editor = window.activeTextEditor;
+        if (!editor) return 0;
 
-        window.setStatusBarMessage("ERROR: 'WORKING-STORAGE SECTION' not found.", 4000);
-    }
-
-    public static move2anyforward(): void {
-        const line = COBOLProgramCommands.findAnyNext(1);
-        if (line > 0) {
-            COBOLProgramCommands.goToLine(line);
-        }
-    }
-
-    public static move2anybackwards(): void {
-        const line = COBOLProgramCommands.findAnyNext(-1);
-        if (line > 0) {
-            COBOLProgramCommands.goToLine(line);
-        }
-    }
-
-    private static findMatch(mat: RegExp) {
-        if (window.activeTextEditor) {
-            const doc = window.activeTextEditor.document;
-            for (let line = 0; line <= doc.lineCount; line++) {
-                const range = new Range(line, 0, line, 132);
-                const txt = doc.getText(range);
-                if (txt.match(mat)) {
-                    return line;
-                }
+        for (let line = 0; line < editor.document.lineCount; line++) {
+            if (editor.document.lineAt(line).text.match(regex)) {
+                return line;
             }
         }
         return 0;
     }
 
-    private static findAnyMatch(mats: RegExp[], counter: number) {
-        if (window.activeTextEditor) {
-            const doc = window.activeTextEditor.document;
-            const editor = window.activeTextEditor;
-            const endValue = counter === 1 ? doc.lineCount : 0;
-            let line = editor.selection.active.line + counter;
-            for (; line !== endValue; line += counter) {
-                const range = new Range(line, 0, line, 132);
-                const txt = doc.getText(range);
-                const matsLen = mats.length;
-                for (let matpos = 0; matpos < matsLen; matpos++) {
-                    const mat = mats[matpos];
-                    if (txt.match(mat)) {
-                        return line;
-                    }
-                }
-            }
+    private static findAnyMatch(patterns: RegExp[], direction: number): number {
+        const editor = window.activeTextEditor;
+        if (!editor) return 0;
+
+        const start = editor.selection.active.line + direction;
+        const end = direction === 1 ? editor.document.lineCount : -1;
+
+        for (let line = start; line !== end; line += direction) {
+            const text = editor.document.lineAt(line).text;
+            if (patterns.some(p => text.match(p))) return line;
         }
         return 0;
     }
 
-    private static findAnyNext(counter: number) {
-        const mats = [
-            /.*\s*division/i,
-            /entry\s*"/i,
-            /.*\s*section\./i,
-            /eject/i,
-            /program-id\./i,
-            /class-id[.|\s]/i,
-            /method-id[.|\s]/i];
-        return COBOLProgramCommands.findAnyMatch(mats, counter);
+    private static findAnyNext(direction: number): number {
+        return this.findAnyMatch(this.anyNextPatterns, direction);
     }
 
-    private static findProcedureDivision() {
-        return COBOLProgramCommands.findMatch(/procedure\s*division/i);
+    private static goToLine(line: number): void {
+        const editor = window.activeTextEditor;
+        if (!editor) return;
+
+        const revealType = line === editor.selection.active.line
+            ? TextEditorRevealType.InCenterIfOutsideViewport
+            : TextEditorRevealType.InCenter;
+
+        const selection = new Selection(line, 0, line, 0);
+        editor.selection = selection;
+        editor.revealRange(selection, revealType);
     }
-
-    private static findDataDivision() {
-        return COBOLProgramCommands.findMatch(/data\s*division/i);
-    }
-
-    private static findWorkingStorageSection() {
-        return COBOLProgramCommands.findMatch(/working-storage\s*section/i);
-    }
-
-
-    private static goToLine(line: number) {
-        if (window.activeTextEditor) {
-            let reviewType = TextEditorRevealType.InCenter;
-            if (line === window.activeTextEditor.selection.active.line) {
-                reviewType = TextEditorRevealType.InCenterIfOutsideViewport;
-            }
-            const newSe = new Selection(line, 0, line, 0);
-            window.activeTextEditor.selection = newSe;
-            window.activeTextEditor.revealRange(newSe, reviewType);
-        }
-    }
-
 }
-
-
-
-
-
-
-
-
-
-

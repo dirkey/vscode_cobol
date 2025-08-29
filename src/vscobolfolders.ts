@@ -2,41 +2,35 @@ import { workspace, WorkspaceFolder } from "vscode";
 import { ICOBOLSettings } from "./iconfiguration";
 
 export class VSWorkspaceFolders {
-    /**
-     * Get workspace folders filtered by "file" scheme with applied order.
-     */
+
+    /** Get workspace folders filtered by "file" scheme with applied order */
     public static get(settings: ICOBOLSettings): ReadonlyArray<WorkspaceFolder> | undefined {
         return this.getFiltered("file", settings);
     }
 
-    /**
-     * Get workspace folders filtered by schema with applied order.
-     */
+    /** Get workspace folders filtered by schema with applied order */
     public static getFiltered(requiredSchema: string, settings: ICOBOLSettings): ReadonlyArray<WorkspaceFolder> | undefined {
-        const ws = workspace.workspaceFolders;
-        if (!ws) return undefined;
+        const wsFolders = workspace.workspaceFolders;
+        if (!wsFolders) return undefined;
 
-        // Build a map of workspace folders, optionally filtering by schema
-        const folderMap = new Map<string, WorkspaceFolder>(
-            ws
-                .filter(folder => !requiredSchema || folder.uri.scheme === requiredSchema)
-                .map(folder => [folder.name, folder])
-        );
+        // Filter folders by schema
+        const filteredFolders = wsFolders.filter(f => !requiredSchema || f.uri.scheme === requiredSchema);
+        const folderMap = new Map(filteredFolders.map(f => [f.name, f]));
 
-        const orderedFolders: WorkspaceFolder[] = [];  
-        const { workspacefolders_order: foldersOrder } = settings;
+        const ordered: WorkspaceFolder[] = [];
+
         // Add explicitly ordered folders first
-        for (const name of foldersOrder) {
+        for (const name of settings.workspacefolders_order) {
             const folder = folderMap.get(name);
             if (folder) {
-                orderedFolders.push(folder);
+                ordered.push(folder);
                 folderMap.delete(name);
             }
         }
 
         // Add remaining folders
-        orderedFolders.push(...folderMap.values());
+        ordered.push(...folderMap.values());
 
-        return orderedFolders;
+        return ordered;
     }
 }

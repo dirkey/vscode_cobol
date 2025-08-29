@@ -1,140 +1,43 @@
-
-
 import * as vscode from "vscode";
-import { ICOBOLSettings } from "./iconfiguration";
 
-export class VSHelpAndFeedViewHandler {
-    public static openUrl(url: string) {
-        vscode.commands.executeCommand("vscode.open", url);
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    static setupSourceViewTree(config: ICOBOLSettings, reinit: boolean): void {
-
-        const helpviewProvider = vscode.window.createTreeView("help-and-feedback-view", {
-            treeDataProvider: new HelpAndFeedbackTree(),
-        });
-
-        helpviewProvider.onDidChangeSelection((e) => {
-            const item = e.selection[0];
-            switch (item) {
-                case FeedBackItem.getStarted:
-                    VSHelpAndFeedViewHandler.openUrl("https://github.com/spgennard/vscode_cobol");
-                    break;
-
-                case FeedBackItem.readDocs:
-                    VSHelpAndFeedViewHandler.openUrl("https://github.com/spgennard/vscode_cobol#readme");
-                    break;
-
-                case FeedBackItem.reviewIssues:
-                    VSHelpAndFeedViewHandler.openUrl("https://github.com/spgennard/vscode_cobol/issues");
-                    break;
-
-                case FeedBackItem.reportIssue:
-                    VSHelpAndFeedViewHandler.openUrl("https://github.com/spgennard/vscode_cobol/issues/new/choose");
-                    break;
-
-                case FeedBackItem.joinCommunity:
-                    VSHelpAndFeedViewHandler.openUrl("https://community.rocketsoftware.com/forums/forum-home?CommunityKey=fc99efc3-3189-48e3-860f-01928efec020");
-                    break;
-
-                case FeedBackItem.review:
-                    VSHelpAndFeedViewHandler.openUrl("https://marketplace.visualstudio.com/items?itemName=bitlang.cobol&ssr=false#review-details");
-                    break;
-
-                case FeedBackItem.courses:
-                    VSHelpAndFeedViewHandler.openUrl("https://www.rocketsoftware.com/learn-cobol");
-                    break;
-
-                case FeedBackItem.introToOO:
-                    VSHelpAndFeedViewHandler.openUrl("https://docs-be.rocketsoftware.com/bundle/enterprisedeveloper_dg5_100_pdf/raw/resource/enus/enterprise_developer_intro_to_oo_programming_for_cobol_developers_vvc70.pdf");
-                    break;
-
-                    
-            }
-            
-        });
-        return;
-    }
-}
-
-enum FeedBackItem {
-    getStarted = "Get Started",
-    readDocs = "Read Documentation",
-    review = "Review extension",
-    reviewIssues = "Review Issues",
-    reportIssue = "Report Issue",
-    joinCommunity = "Join the 'Rocket Software' Community",
-    courses = "'Rocket Software' On-Demand Courses",
-    introToOO = "Introduction to OO Programming"
-}
-
-export class HelpAndFeedbackTree implements vscode.TreeDataProvider<FeedBackItem> {
-    ALL_FEEDBACK_ITEMS = [
-        FeedBackItem.getStarted,
-        FeedBackItem.courses,
-        FeedBackItem.introToOO,
-        FeedBackItem.joinCommunity,
-        FeedBackItem.review,
-        FeedBackItem.reportIssue
+export class VSHelpAndFeedback implements vscode.TreeDataProvider<FeedbackItem> {
+    private readonly items: FeedbackItem[] = [
+        { label: "Get Started", icon: "star", url: "https://github.com/spgennard/vscode_cobol" },
+        { label: "Read Documentation", icon: "book", url: "https://github.com/spgennard/vscode_cobol#readme" },
+        { label: "Review Issues", icon: "issues", url: "https://github.com/spgennard/vscode_cobol/issues" },
+        { label: "Report Issue", icon: "comment", url: "https://github.com/spgennard/vscode_cobol/issues/new/choose" },
+        { label: "Join the 'Rocket Software' Community", icon: "organization", url: "https://community.rocketsoftware.com/forums/forum-home?CommunityKey=fc99efc3-3189-48e3-860f-01928efec020" },
+        { label: "Review extension", icon: "book", url: "https://marketplace.visualstudio.com/items?itemName=bitlang.cobol&ssr=false#review-details" },
+        { label: "'Rocket Software' On-Demand Courses", icon: "play-circle", url: "https://www.rocketsoftware.com/learn-cobol" },
+        { label: "Introduction to OO Programming", icon: "file-pdf", url: "https://docs-be.rocketsoftware.com/bundle/enterprisedeveloper_dg5_100_pdf/raw/resource/enus/enterprise_developer_intro_to_oo_programming_for_cobol_developers_vvc70.pdf" }
     ];
 
+    private _onDidChangeTreeData = new vscode.EventEmitter<FeedbackItem | undefined | null | void>();
+    readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
     constructor() {
-        return;
+        const treeView = vscode.window.createTreeView("help-and-feedback-view", { treeDataProvider: this });
+        treeView.onDidChangeSelection(e => {
+            const item = e.selection[0];
+            if (item?.url) vscode.commands.executeCommand("vscode.open", item.url);
+        });
     }
 
-    private _onDidChangeTreeData: vscode.EventEmitter<FeedBackItem | undefined | null | void> = new vscode.EventEmitter<FeedBackItem | undefined | null | void>();
-    readonly onDidChangeTreeData: vscode.Event<FeedBackItem | undefined | null | void> = this._onDidChangeTreeData.event;
-
-    public getTreeItem(element: FeedBackItem): vscode.TreeItem {
-        let iconPath: vscode.ThemeIcon;
-
-        switch (element) {
-            case FeedBackItem.getStarted:
-                iconPath = new vscode.ThemeIcon("star");
-                break;
-
-            case FeedBackItem.readDocs:
-                iconPath = new vscode.ThemeIcon("book");
-                break;
-
-            case FeedBackItem.reviewIssues:
-                iconPath = new vscode.ThemeIcon("issues");
-                break;
-
-            case FeedBackItem.reportIssue:
-                iconPath = new vscode.ThemeIcon("comment");
-                break;
-
-            case FeedBackItem.joinCommunity:
-                iconPath = new vscode.ThemeIcon("organization");
-                break;
-
-            case FeedBackItem.review:
-                iconPath = new vscode.ThemeIcon("book");
-                break;
-
-            case FeedBackItem.courses:
-                iconPath = new vscode.ThemeIcon("play-circle");
-                break;
-
-            case FeedBackItem.introToOO:
-                iconPath = new vscode.ThemeIcon("file-pdf");
-                break;
-        }
-
+    getTreeItem(element: FeedbackItem): vscode.TreeItem {
         return {
-            label: element.toString(),
+            label: element.label,
             collapsibleState: vscode.TreeItemCollapsibleState.None,
-            iconPath
+            iconPath: new vscode.ThemeIcon(element.icon)
         };
     }
 
-    public getChildren(element?: FeedBackItem): vscode.ProviderResult<FeedBackItem[]> {
-        if (element === undefined) {
-            return this.ALL_FEEDBACK_ITEMS;
-        }
-
-        return [];
+    getChildren(element?: FeedbackItem): vscode.ProviderResult<FeedbackItem[]> {
+        return element ? [] : this.items;
     }
+}
+
+interface FeedbackItem {
+    label: string;
+    icon: string;
+    url: string;
 }
