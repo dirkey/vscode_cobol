@@ -13,41 +13,33 @@ let sourceTreeWatcher: vscode.FileSystemWatcher | undefined = undefined;
 
 export class VSSourceTreeViewHandler {
     static async setupSourceViewTree(config: ICOBOLSettings, reinit: boolean): Promise<void> {
-
+        // Clean up existing tree if needed
         if ((config.sourceview === false || reinit) && sourceTreeView !== undefined) {
             sourceTreeWatcher?.dispose();
             sourceTreeView = undefined;
         }
 
+        // Create new tree if needed
         if (config.sourceview && sourceTreeView === undefined) {
             sourceTreeView = new SourceViewTree(config);
             await sourceTreeView.init(config);
+            
+            // Set up file system watcher
             sourceTreeWatcher = workspace.createFileSystemWatcher("**/*");
-
             sourceTreeWatcher.onDidCreate((uri) => {
-                if (sourceTreeView !== undefined) {
-                    sourceTreeView.checkFile(uri);
-                }
+                sourceTreeView?.checkFile(uri);
             });
-
             sourceTreeWatcher.onDidDelete((uri) => {
-                if (sourceTreeView !== undefined) {
-                    sourceTreeView.clearFile(uri);
-                }
+                sourceTreeView?.clearFile(uri);
             });
 
+            // Register tree data provider
             vscode.window.registerTreeDataProvider("flat-source-view", sourceTreeView);
-            return;
         }
-
     }
 
     static actionSourceViewItemFunction(si: SourceOrFolderTreeItem, debug: boolean): void {
-        let fsPath = "";
-        if (si !== undefined && si.uri !== undefined) {
-            fsPath = si.uri.path as string;
-        }
-
+        const fsPath = si?.uri?.path ?? "";
         VSCOBOLUtils.runOrDebug(fsPath, debug);
     }
 }

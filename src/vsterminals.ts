@@ -16,7 +16,7 @@ export function runAsync(cmd: string, timeout = 1000): Promise<string> {
         let timer: NodeJS.Timeout;
         let wasKilled = false;
 
-        const childProcess = cp.exec(cmd, (err, stdout, stderr) => {
+        const childProcess = cp.exec(cmd, { encoding: "utf-8" }, (err, stdout, stderr) => {
             clearTimeout(timer);
 
             if (wasKilled) {
@@ -24,22 +24,25 @@ export function runAsync(cmd: string, timeout = 1000): Promise<string> {
             }
 
             if (stdout) {
-                return resolve(stdout);
+                return resolve(stdout.trim());
             }
 
             if (stderr) {
-                return reject(stderr);
+                return reject(new Error(stderr.trim()));
             }
 
             if (err) {
-                return reject(err.message);
+                return reject(new Error(err.message));
             }
+            
+            // Handle case where neither stdout nor stderr but process completed
+            resolve("");
         });
 
         timer = setTimeout(() => {
             wasKilled = true;
             childProcess.kill();
-            reject("timeout");
+            reject(new Error("timeout"));
         }, timeout);
     });
 }
@@ -53,7 +56,7 @@ export function runAsync(cmd: string, timeout = 1000): Promise<string> {
  * @param suppressError if true, will not show error message. Defaults to false.
  * @returns A string with stdout if any, or null if error.
  */
-export function runSync(cmd: string, suppressError = false, processEncoding: "utf-8"): string | null {
+export function runSync(cmd: string, suppressError = false, processEncoding: "utf-8" = "utf-8"): string | null {
     let result = "";
     try {
         result = cp.execSync(cmd, { encoding: processEncoding });

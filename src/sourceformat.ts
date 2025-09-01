@@ -68,10 +68,45 @@ export class SourceFormat {
         for (const filter of config.editor_margin_files) {
             try {
                 const re = globToRegExp(filter.pattern, { flags: "i" });
-                if (re.test(doc.getFilename())) return ESourceFormat[filter.sourceformat];
+                if (re.test(doc.getFilename())) {
+                    switch (filter.sourceformat.toLowerCase()) {
+                        case "fixed": return ESourceFormat.fixed;
+                        case "variable": return ESourceFormat.variable;
+                        case "free": return ESourceFormat.free;
+                        case "terminal": return ESourceFormat.terminal;
+                        default: return undefined;
+                    }
+                }
             } catch {}
         }
         return undefined;
+    }
+
+    private static determineFormatFromHeuristics(
+        validFixedLines: number,
+        invalidFixedLines: number,
+        linesGT80: number,
+        keywordAtColumn0: number,
+        maxLines: number,
+        skippedLines: number,
+        isTerminal: boolean
+    ): ESourceFormat {
+        let defFormat: ESourceFormat = ESourceFormat.unknown;
+
+        // Heuristics
+        if (keywordAtColumn0 >= 2 && invalidFixedLines >= 2) {
+            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.free;
+        }
+
+        if (defFormat === ESourceFormat.unknown) {
+            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.variable;
+        }
+
+        if (invalidFixedLines === 0 && linesGT80 === 0 && (validFixedLines + skippedLines === maxLines)) {
+            return ESourceFormat.fixed;
+        }
+
+        return defFormat;
     }
 
     public static get(doc: ISourceHandlerLite, config: ICOBOLSettings): ESourceFormat {
@@ -93,7 +128,6 @@ export class SourceFormat {
         const isTerminal = langId === "acucobol";
         const keywords = new Set(getCOBOLKeywordDictionary(langId).keys());
 
-        let defFormat: ESourceFormat = ESourceFormat.unknown;
         let validFixedLines = 0;
         let invalidFixedLines = 0;
         let skippedLines = 0;
@@ -119,18 +153,16 @@ export class SourceFormat {
             if (!analyzer.validFixedLine && lineText.length > 80) linesGT80++;
         }
 
-        // Heuristics
-        if (keywordAtColumn0 >= 2 && invalidFixedLines >= 2) {
-            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.free;
-        }
-
-        if (defFormat === ESourceFormat.unknown) {
-            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.variable;
-        }
-
-        if (invalidFixedLines === 0 && linesGT80 === 0 && (validFixedLines + skippedLines === maxLines)) {
-            return ESourceFormat.fixed;
-        }
+        // Determine format from heuristics
+        const defFormat = this.determineFormatFromHeuristics(
+            validFixedLines,
+            invalidFixedLines,
+            linesGT80,
+            keywordAtColumn0,
+            maxLines,
+            skippedLines,
+            isTerminal
+        );
 
         // Late file-based override
         if (!config.check_file_format_before_file_scan) {

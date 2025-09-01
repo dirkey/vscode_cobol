@@ -20,7 +20,6 @@ export class MFDirectivesSymbolProvider implements vscode.DocumentSymbolProvider
         }
 
         const ownerUri = document.uri;
-
         const container = "";
 
         for (let i = 0; i < document.lineCount; i++) {
@@ -32,24 +31,26 @@ export class MFDirectivesSymbolProvider implements vscode.DocumentSymbolProvider
             }
 
             if (textText.length > 1 && textText.trim() === "@root") {
-                // 
                 const srange = new vscode.Range(new vscode.Position(i, 1), new vscode.Position(i, textText.length));
                 const lrange = new vscode.Location(ownerUri, srange);
 
                 symbols.push(new vscode.SymbolInformation("@root", vscode.SymbolKind.Constant, container, lrange));
 
-                await vscode.workspace.findFiles("**/*/directives.mf").then((uris: vscode.Uri[]) => {
-                    uris.forEach((uri: vscode.Uri) => {
-
-                        const item = uri.toString().substring(ownerUri.toString().length-"directives.mf".length);
+                // Find all directives.mf files and add them as symbols
+                try {
+                    const uris = await vscode.workspace.findFiles("**/*/directives.mf");
+                    for (const uri of uris) {
+                        // Calculate relative path from the current document's directory
+                        const relativePath = uri.fsPath.replace(ownerUri.fsPath, "").replace(/^\/+/, "");
                         const srange = new vscode.Range(new vscode.Position(1, 1), new vscode.Position(1, 1));
-                        const lrange = new vscode.Location(vscode.Uri.parse(uri.toString()), srange);
-
-                        const si = new vscode.SymbolInformation(item, vscode.SymbolKind.File, item, lrange);
+                        const lrange = new vscode.Location(uri, srange);
+                        
+                        const si = new vscode.SymbolInformation(relativePath, vscode.SymbolKind.File, container, lrange);
                         symbols.push(si);
-
-                    });
-                });
+                    }
+                } catch (error) {
+                    VSLogger.logException("Failed to find directives.mf files", error as Error);
+                }
 
                 continue;
             }
@@ -61,14 +62,17 @@ export class MFDirectivesSymbolProvider implements vscode.DocumentSymbolProvider
                 const startLine = i;
                 let prevLineLength = lastLineLength;
 
+                // Find the end of this section
                 for (i = 1 + i; i < document.lineCount; i++) {
                     const line2 = document.lineAt(i);
                     const textText2 = line2.text.trimEnd();
+                    
                     if (textText2.trimStart().length === 0) {
                         lastLine = i;
                         lastLineLength = textText2.length;
                         break;
                     }
+                    
                     if (textText2.length > 2 && textText2.startsWith("[") && textText2.endsWith("]")) {
                         lastLine = i - 1;
                         lastLineLength = prevLineLength;
@@ -102,14 +106,13 @@ export class JCLDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
         }
 
         const ownerUri = document.uri;
-
         const lastLine = document.lineCount;
         const lastLineColumn = document.lineAt(lastLine - 1).text.length;
         let container = "";
 
         for (let i = 0; i < document.lineCount; i++) {
             const line = document.lineAt(i);
-            const textText = line.text;
+            const textText = line.text.trimEnd();
 
             if (textText.startsWith("//*")) {
                 continue;
@@ -120,6 +123,7 @@ export class JCLDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
                 const lineTokens = [];
                 const possibleTokens: string[] = [];
                 SplitTokenizer.splitArgument(textLineClean, possibleTokens);
+                
                 for (let l = 0; l < possibleTokens.length; l++) {
                     if (possibleTokens[l] !== undefined) {
                         const possibleToken = possibleTokens[l].trim();
@@ -131,28 +135,28 @@ export class JCLDocumentSymbolProvider implements vscode.DocumentSymbolProvider 
 
                 if (lineTokens.length > 0) {
                     if (lineTokens.length > 1) {
+                        const firstToken = lineTokens[0];
+                        const secondToken = lineTokens[1].toLowerCase();
 
-                        if (lineTokens[1].toLowerCase().indexOf("job") !== -1) {
+                        if (secondToken.indexOf("job") !== -1) {
                             const srange = new vscode.Range(new vscode.Position(i, 0),
                                 new vscode.Position(lastLine, lastLineColumn));
                             const lrange = new vscode.Location(ownerUri, srange);
 
-                            symbols.push(new vscode.SymbolInformation(lineTokens[0], vscode.SymbolKind.Field, container, lrange));
-                            container = lineTokens[0];
+                            symbols.push(new vscode.SymbolInformation(firstToken, vscode.SymbolKind.Field, container, lrange));
+                            container = firstToken;
                         }
 
-                        if (lineTokens[1].toLowerCase().indexOf("exec") !== -1) {
+                        if (secondToken.indexOf("exec") !== -1) {
                             const srange = new vscode.Range(new vscode.Position(i, 0),
-                                new vscode.Position(i, lineTokens.length));
+                                new vscode.Position(i, textText.length));
                             const lrange = new vscode.Location(ownerUri, srange);
 
-                            symbols.push(new vscode.SymbolInformation(lineTokens[0], vscode.SymbolKind.Function, container, lrange));
+                            symbols.push(new vscode.SymbolInformation(firstToken, vscode.SymbolKind.Function, container, lrange));
                         }
-
                     }
                 }
             }
-
         }
 
         return symbols;

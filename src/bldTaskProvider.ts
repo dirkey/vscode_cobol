@@ -39,7 +39,7 @@ export class BldScriptTaskProvider implements vscode.TaskProvider {
         if (!scriptFile) return;
 
         const definition = task.definition as BldScriptDefinition;
-        if (!definition.task) return;
+        if (definition.arguments === undefined) return;
 
         const she = new vscode.ShellExecution(
             `${BldScriptTaskProvider.scriptPrefix}${scriptFile} ${definition.arguments}`,
@@ -47,7 +47,7 @@ export class BldScriptTaskProvider implements vscode.TaskProvider {
         );
 
         const resolvedTask = new vscode.Task(
-            definition.task,
+            definition,
             vscode.TaskScope.Workspace,
             BldScriptTaskProvider.BldSource,
             BldScriptTaskProvider.BldScriptType,
@@ -57,28 +57,28 @@ export class BldScriptTaskProvider implements vscode.TaskProvider {
 
         const dname = path.dirname(scriptFile);
         const fname = `${scriptFile.substring(dname.length + 1)} (in ${dname})`;
-        task.detail = `Execute ${fname}`;
+        resolvedTask.detail = `Execute ${fname}`;
 
         return resolvedTask;
     }
 
-		private getFileFromWorkspace(settings: ICOBOLSettings): string | undefined {
-				const folders = VSWorkspaceFolders.get(settings);
-				if (!folders) return undefined;
+    private getFileFromWorkspace(settings: ICOBOLSettings): string | undefined {
+        const folders = VSWorkspaceFolders.get(settings);
+        if (!folders) return undefined;
 
-				for (const folder of folders) {
-						if (folder.uri.scheme !== "file") continue;
+        for (const folder of folders) {
+            if (folder.uri.scheme !== "file") continue;
 
-						const fullPath = path.join(folder.uri.fsPath, BldScriptTaskProvider.scriptName);
-						try {
-								if (COBOLFileUtils.isFile(fullPath)) return fullPath;
-						} catch {
-								continue;
-						}
-				}
+            const fullPath = path.join(folder.uri.fsPath, BldScriptTaskProvider.scriptName);
+            try {
+                if (COBOLFileUtils.isFile(fullPath)) return fullPath;
+            } catch {
+                continue;
+            }
+        }
 
-				return undefined; // <- explicit fallback for TypeScript
-		}
+        return undefined;
+    }
 
     public static getSHEOptions(scriptPath: string): vscode.ShellExecutionOptions {
         return { cwd: dirname(scriptPath) };

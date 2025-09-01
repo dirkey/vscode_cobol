@@ -6,41 +6,25 @@ import { IAnchorTabInfo, ICOBOLSettings } from "./iconfiguration";
 import { VSExternalFeatures } from "./vsexternalfeatures";
 
 export class TabUtils {
-
-    // TODO: Look at move this into a workspace locale area
     private static readonly handler = new TabUtils();
     private tabregMap = new Map<IAnchorTabInfo, RegExp>();
 
-    private escapeString(str: string) : string {
-        const chrs:string[] = [];
-        for(const c of str) {
-            switch(c) {
-                case "$": chrs.push("\\$");
-                break;
-
-                default:
-                    chrs.push(c);
-            }
-            //[ ] { } ( ) \ ^ $ . | ? * +
-        }
-
-        return chrs.join("");
+    private escapeString(str: string): string {
+        return str.replace(/\$/g, '\\$');
     }
 
     private makeRegex(partialRegEx: string): RegExp | undefined {
         try {
-            return new RegExp(".*"+this.escapeString(partialRegEx)+".*$", "i");
-        }
-        catch {
+            return new RegExp(".*" + this.escapeString(partialRegEx) + ".*$", "i");
+        } catch {
             return undefined;
         }
     }
 
     private getTabsForLine(line: string, settings: ICOBOLSettings): IAnchorTabInfo {
-
         if (settings.enable_tabstops_anchors) {
             const lineU = line.toLowerCase();
-            for (const [lineTab,testReg] of this.tabregMap) {
+            for (const [lineTab, testReg] of this.tabregMap) {
                 if (testReg.test(lineU)) {
                     return lineTab;
                 }
@@ -50,22 +34,24 @@ export class TabUtils {
     }
 
     public async executeTab(editor: TextEditor, doc: TextDocument, sel: readonly Selection[], inserting: boolean): Promise<void> {
-        const settings = VSCOBOLConfiguration.get_resource_settings(editor.document,VSExternalFeatures);
+        const settings = VSCOBOLConfiguration.get_resource_settings(editor.document, VSExternalFeatures);
 
         if (this.tabregMap.size === 0) {
             for (const lineTab of settings.anchor_tabstops) {
                 const newRegex = this.makeRegex(lineTab.anchor);
-                if (newRegex)
+                if (newRegex) {
                     this.tabregMap.set(lineTab, newRegex);
+                }
             }
         }
-        
+
         editor.edit(edit => {
             for (let x = 0; x < sel.length; x++) {
                 if (sel[x].isSingleLine) {
                     const position = sel[x].start;
                     const thisLine = editor.document.lineAt(position.line).text;
                     const tabs = this.getTabsForLine(thisLine, settings);
+                    
                     if (inserting) {
                         this.singleSelectionTab(settings, edit, doc, position, tabs);
                     } else {
@@ -79,16 +65,15 @@ export class TabUtils {
                     }
                 }
             }
-
         });
     }
 
-    private async singleSelectionTab(settings: ICOBOLSettings, edit: TextEditorEdit, d: TextDocument, pos: Position, tabs: IAnchorTabInfo): Promise<void> {
+    private singleSelectionTab(settings: ICOBOLSettings, edit: TextEditorEdit, d: TextDocument, pos: Position, tabs: IAnchorTabInfo): void {
         const size = this.cobolTabSize(pos.character, tabs);
         edit.insert(pos, " ".repeat(size));
     }
 
-    private async singleSelectionUnTab(singleLine: boolean, settings: ICOBOLSettings, edit: TextEditorEdit, d: TextDocument, pos: Position, tabs: IAnchorTabInfo): Promise<void> {
+    private singleSelectionUnTab(singleLine: boolean, settings: ICOBOLSettings, edit: TextEditorEdit, d: TextDocument, pos: Position, tabs: IAnchorTabInfo): void {
         let charpos = pos.character;
         if (charpos === 0) {
             const selline = d.lineAt(pos.line).text;
@@ -106,12 +91,10 @@ export class TabUtils {
 
         if (txt === " ".repeat(size)) {
             edit.delete(range);
-        } else {
+        } else if (singleLine && txt.length > 0) {
             // no text, so no movement required
-            if (singleLine && txt.length > 0) {
-                for (let x = 0; x < size; x++) {
-                    await commands.executeCommand("cursorMove", { to: "left" });
-                }
+            for (let x = 0; x < size; x++) {
+                commands.executeCommand("cursorMove", { to: "left" });
             }
         }
     }
@@ -142,7 +125,6 @@ export class TabUtils {
         let tab = 0;
         for (let index = 0; index < tabs.length; index++) {
             tab = tabs[index];
-
             if (tab > pos) {
                 return tab - pos;
             }
@@ -153,8 +135,7 @@ export class TabUtils {
         return out_of_range_tabstop_size === 0 ? 0 : out_of_range_tabstop_size - ((pos - tabs[tabs.length - 1]) % out_of_range_tabstop_size);
     }
 
-
-    public cobolUnTabSize(pos: number, tabinfo: IAnchorTabInfo) {
+    public cobolUnTabSize(pos: number, tabinfo: IAnchorTabInfo): number {
         const tabs = tabinfo.tabstops;
         const out_of_range_tabstop_size = tabinfo.out_of_range_tabstop_size;
 
@@ -188,10 +169,7 @@ export class TabUtils {
         }
     }
 
-    public static clearTabstopCache():void {
+    public static clearTabstopCache(): void {
         TabUtils.handler.tabregMap.clear();
     }
 }
-
-
-

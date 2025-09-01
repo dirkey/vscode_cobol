@@ -1,29 +1,11 @@
 import * as vscode from "vscode";
 import { CancellationToken, FormattingOptions, TextDocument, TextEdit, Position } from "vscode";
 import { VSCOBOLUtils, FoldAction } from "./vscobolutils";
-import { ICOBOLSettings } from "./iconfiguration";
 import { VSCOBOLSourceScanner } from "./vscobolscanner";
 import { VSCOBOLConfiguration } from "./vsconfiguration";
 import { VSExternalFeatures } from "./vsexternalfeatures";
-import { ICOBOLSourceScanner } from "./icobolsourcescanner";
 
 export class COBOLCaseFormatter {
-
-    private convertLine(settings: ICOBOLSettings, line: string, current: ICOBOLSourceScanner, foldConstantToUpper: boolean, langid: string): string {
-        const defaultStyle = settings.intellisense_style;
-        let text = line;
-        const actions: FoldAction[] = [
-            FoldAction.Keywords,
-            FoldAction.ConstantsOrVariables,
-            FoldAction.PerformTargets
-        ];
-
-        for (const action of actions) {
-            text = VSCOBOLUtils.foldTokenLine(text, current, action, foldConstantToUpper, langid, settings, defaultStyle);
-        }
-
-        return text;
-    }
 
     public provideOnTypeFormattingEdits(
         document: TextDocument,
@@ -45,14 +27,25 @@ export class COBOLCaseFormatter {
         const line = document.lineAt(lineIndex)?.text;
         if (!line) return;
 
-        const newText = this.convertLine(settings, line, current, settings.format_constants_to_uppercase, document.languageId);
-        if (newText === line) return [];
+        const actions: FoldAction[] = [
+            FoldAction.Keywords,
+            FoldAction.ConstantsOrVariables,
+            FoldAction.PerformTargets
+        ];
+
+        let text = line;
+        const defaultStyle = settings.intellisense_style;
+        for (const action of actions) {
+            text = VSCOBOLUtils.foldTokenLine(text, current, action, settings.format_constants_to_uppercase, document.languageId, settings, defaultStyle);
+        }
+
+        if (text === line) return [];
 
         const range = new vscode.Range(
             new vscode.Position(lineIndex, 0),
             new vscode.Position(lineIndex, line.length)
         );
 
-        return [TextEdit.replace(range, newText)];
+        return [TextEdit.replace(range, text)];
     }
 }

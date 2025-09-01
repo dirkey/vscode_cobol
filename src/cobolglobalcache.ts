@@ -5,13 +5,7 @@
 import { COBOLFileUtils } from "./fileutils";
 
 export class COBOLWorkspaceFile {
-    lastModifiedTime:BigInt;
-    workspaceFilename: string;
-
-    constructor(lastModifiedTime:BigInt, workspaceFilename: string) {
-        this.lastModifiedTime = lastModifiedTime;
-        this.workspaceFilename = workspaceFilename;
-    }
+    constructor(public lastModifiedTime: BigInt, public workspaceFilename: string) {}
 }
 
 export class COBOLGlobalSymbolTable {
@@ -37,7 +31,7 @@ export class COBOLGlobalSymbolTable {
 }
 
 export class COBOLSymbolTable {
-    public lastModifiedTime:BigInt = BigInt("0");
+    public lastModifiedTime: BigInt = 0n;
     public fileName = "";
 
     public variableSymbols: Map<string, COBOLSymbol>;
@@ -48,8 +42,7 @@ export class COBOLSymbolTable {
         this.labelSymbols = new Map<string, COBOLSymbol>();
     }
 
-    // eslint-disable-next-line @typescript-eslint/ban-types
-    static fromJSON(d: Object): COBOLSymbolTable {
+    static fromJSON(d: any): COBOLSymbolTable {
         return Object.assign(new COBOLSymbolTable(), d);
     }
 }
