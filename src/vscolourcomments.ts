@@ -1,4 +1,14 @@
-import { DecorationOptions, DecorationRenderOptions, Position, Range, TextDocument, TextEditor, TextEditorDecorationType, ThemeColor, window, workspace } from "vscode";
+import {
+    DecorationOptions,
+    DecorationRenderOptions,
+    Position,
+    Range,
+    TextEditor,
+    TextEditorDecorationType,
+    ThemeColor,
+    window,
+    workspace,
+} from "vscode";
 import { ExtensionDefaults } from "./extensionDefaults";
 import { ESourceFormat } from "./externalfeatures";
 import { commentRange, ICommentCallback, ISourceHandlerLite } from "./isourcehandler";
@@ -22,18 +32,18 @@ interface CommentTagItem {
 }
 
 export class ColourTagHandler {
-
     public setupTags(configElement: string, tags: Map<string, TextEditorDecorationType>): void {
-        const items = workspace.getConfiguration(ExtensionDefaults.defaultEditorConfig).get<CommentTagItem[]>(configElement);
-        if (!items) return;
+        const items = workspace
+            .getConfiguration(ExtensionDefaults.defaultEditorConfig)
+            .get<CommentTagItem[]>(configElement);
 
+        if (!items) return;
         tags.clear();
 
         for (const item of items) {
             try {
-                const options: DecorationRenderOptions = ColourTagHandler.buildDecorationOptions(item);
-                const decoration = window.createTextEditorDecorationType(options);
-                tags.set(item.tag.toUpperCase(), decoration);
+                const options = ColourTagHandler.buildDecorationOptions(item);
+                tags.set(item.tag.toUpperCase(), window.createTextEditorDecorationType(options));
             } catch (e) {
                 VSLogger.logException("Invalid comments_tags entry", e as Error);
             }
@@ -65,82 +75,89 @@ export class ColourTagHandler {
 }
 
 class CommentColourHandlerImpl extends ColourTagHandler implements ICommentCallback {
-    static readonly emptyCommentDecoration = window.createTextEditorDecorationType({});
-
-    private tags = new Map<string, TextEditorDecorationType>();
+    private readonly tags = new Map<string, TextEditorDecorationType>();
 
     constructor() {
         super();
         this.setupTags();
     }
 
-    public setupTags() {
+    public setupTags(): void {
         super.setupTags("comments_tags", this.tags);
     }
 
     public processComment(
-        configHandler: ICOBOLSettings,
-        sourceHandler: ISourceHandlerLite,
+        config: ICOBOLSettings,
+        source: ISourceHandlerLite,
         commentLine: string,
-        _sourceFilename: string,
-        sourceLineNumber: number,
+        _filename: string,
+        lineNumber: number,
         startPos: number,
         _format: ESourceFormat
     ): void {
-        if (!configHandler.enable_comment_tags) return;
+        if (!config.enable_comment_tags) return;
 
-        const commentLineUpper = commentLine.toUpperCase();
-        let lowestTag: commentRange | undefined;
+        const commentUpper = commentLine.toUpperCase();
+        let bestMatch: commentRange | undefined;
         let lowestPos = commentLine.length;
 
         for (const tag of this.tags.keys()) {
-            const pos = commentLineUpper.indexOf(tag, startPos + 1);
+            const pos = commentUpper.indexOf(tag, startPos + 1);
             if (pos !== -1 && pos < lowestPos) {
                 lowestPos = pos;
-                lowestTag = new commentRange(
-                    sourceLineNumber,
+                bestMatch = new commentRange(
+                    lineNumber,
                     pos,
-                    configHandler.comment_tag_word ? tag.length : commentLineUpper.length - startPos,
+                    config.comment_tag_word ? tag.length : commentUpper.length - startPos,
                     tag
                 );
             }
         }
 
-        if (lowestTag) sourceHandler.getNotedComments().push(lowestTag);
+        if (bestMatch) source.getNotedComments().push(bestMatch);
     }
 
-    public async updateDecorations(activeTextEditor: TextEditor | undefined) {
-        if (!activeTextEditor) return;
+    public async updateDecorations(editor: TextEditor | undefined): Promise<void> {
+        if (!editor) return;
 
-        const configHandler = VSCOBOLConfiguration.get_resource_settings(activeTextEditor.document, VSExternalFeatures);
-        if (!configHandler.enable_comment_tags) return;
+        const config = VSCOBOLConfiguration.get_resource_settings(editor.document, VSExternalFeatures);
+        if (!config.enable_comment_tags) return;
 
-        // Clear all previous decorations
-        const empty: DecorationOptions[] = [];
-        for (const dec of this.tags.values()) {
-            activeTextEditor.setDecorations(dec, empty);
-        }
+        this.clearAllDecorations(editor);
 
-        const doc: TextDocument = activeTextEditor.document;
-        if (VSExtensionUtils.isSupportedLanguage(doc) !== TextLanguage.COBOL) return;
+        if (VSExtensionUtils.isSupportedLanguage(editor.document) !== TextLanguage.COBOL) return;
 
-        const scanner = VSCOBOLSourceScanner.getCachedObject(doc, configHandler);
+        const scanner = VSCOBOLSourceScanner.getCachedObject(editor.document, config);
         if (!scanner) return;
 
-        const decorationsMap = new Map<string, DecorationOptions[]>();
-        for (const range of scanner.sourceHandler.getNotedComments()) {
-            const startPos = new Position(range.startLine, range.startColumn);
-            const endPos = new Position(range.startLine, range.startColumn + range.length);
-            const decoration: DecorationOptions = { range: new Range(startPos, endPos) };
-
-            const key = range.commentStyle.toUpperCase();
-            if (!decorationsMap.has(key)) decorationsMap.set(key, []);
-            decorationsMap.get(key)?.push(decoration);
-        }
+        const decorationsMap = this.buildDecorations(scanner.sourceHandler.getNotedComments());
 
         for (const [tag, decorationType] of this.tags) {
-            activeTextEditor.setDecorations(decorationType, decorationsMap.get(tag) ?? []);
+            editor.setDecorations(decorationType, decorationsMap.get(tag) ?? []);
         }
+    }
+
+    private clearAllDecorations(editor: TextEditor): void {
+        const empty: DecorationOptions[] = [];
+        for (const dec of this.tags.values()) {
+            editor.setDecorations(dec, empty);
+        }
+    }
+
+    private buildDecorations(ranges: commentRange[]): Map<string, DecorationOptions[]> {
+        const decorations = new Map<string, DecorationOptions[]>();
+
+        for (const range of ranges) {
+            const start = new Position(range.startLine, range.startColumn);
+            const end = new Position(range.startLine, range.startColumn + range.length);
+            const option: DecorationOptions = { range: new Range(start, end) };
+
+            const key = range.commentStyle.toUpperCase();
+            if (!decorations.has(key)) decorations.set(key, []);
+            decorations.get(key)?.push(option);
+        }
+
+        return decorations;
     }
 }
 
