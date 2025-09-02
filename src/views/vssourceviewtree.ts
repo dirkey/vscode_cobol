@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
 
-import { SourceOrFolderTreeItem } from "./sourceItem";
+import { SourceOrFolderTreeItem } from "../sourceItem";
 import { workspace } from "vscode";
-import { ICOBOLSettings } from "./iconfiguration";
-import { VSWorkspaceFolders } from "./vscobolfolders";
-import { VSLogger } from "./vslogger";
-import { VSCOBOLSourceScannerTools } from "./vssourcescannerutils";
-import { VSCOBOLUtils } from "./vscobolutils";
+import { ICOBOLSettings } from "../iconfiguration";
+import { VSWorkspaceFolders } from "../vscobolfolders";
+import { VSLogger } from "../vslogger";
+import { VSCOBOLSourceScannerTools } from "../vssourcescannerutils";
+import { VSCOBOLUtils } from "../vscobolutils";
 
 let sourceTreeView: SourceViewTree | undefined;
 let sourceTreeWatcher: vscode.FileSystemWatcher | undefined;

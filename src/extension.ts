@@ -13,7 +13,7 @@ import { VSCOBOLSourceScanner } from "./vscobolscanner";
 import { VSCOBOLConfiguration } from "./vsconfiguration";
 import { CobolReferenceProvider } from "./vsreferenceprovider";
 import { CobolLinterProvider, CobolLinterActionFixer } from "./cobollinter";
-import { VSSourceTreeViewHandler } from "./vssourceviewtree";
+import { VSSourceTreeViewHandler } from "./views/vssourceviewtree";
 import { CobolSourceCompletionItemProvider } from "./vscobolprovider";
 import { VSCOBOLUtils } from "./vscobolutils";
 import { ICOBOLSettings } from "./iconfiguration";

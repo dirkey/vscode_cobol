@@ -21,7 +21,7 @@ import { VSCobolRenameProvider } from "../vsrenameprovider";
 import { VSPPCodeLens } from "../vsppcodelens";
 import { activateCommonCommands, checkForExtensionConflicts } from "../vscommon_commands";
 import { VSWorkspaceFolders } from "../vscobolfolders";
-import { VSSourceTreeViewHandler } from "../vssourceviewtree";
+import { VSSourceTreeViewHandler } from "../views/vssourceviewtree";
 import { VSHoverProvider } from "../vshoverprovider";
 import { CobolReferenceProvider } from "../vsreferenceprovider";
 import { VSHelpAndFeedback } from "../views/feedbacktree";
