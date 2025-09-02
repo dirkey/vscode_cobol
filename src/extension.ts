@@ -520,7 +520,7 @@ export async function activate(context: ExtensionContext) {
 
     context.subscriptions.push(workspace.onDidOpenTextDocument(async (doc: vscode.TextDocument) => {
 
-        VSExtensionUtils.flip_plaintext(doc);
+        VSExtensionUtils.flipPlaintext(doc);
 
         if (VSExtensionUtils.isSupportedLanguage(doc)) {
             if (window.activeTextEditor) {
@@ -562,7 +562,7 @@ export async function activate(context: ExtensionContext) {
 
     /* flip any already opened docs */
     for (let docid = 0; docid < workspace.textDocuments.length; docid++) {
-        VSExtensionUtils.flip_plaintext(workspace.textDocuments[docid]);
+        VSExtensionUtils.flipPlaintext(workspace.textDocuments[docid]);
     }
 
     await VSSourceTreeViewHandler.setupSourceViewTree(settings, false);

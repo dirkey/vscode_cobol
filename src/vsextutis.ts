@@ -1,16 +1,29 @@
-import { ICOBOLSettings } from "./iconfiguration";
 import * as vscode from "vscode";
+import { ICOBOLSettings } from "./iconfiguration";
 
 export enum TextLanguage {
-    Unknown = 0,
-    COBOL = 1,
-    JCL = 2
+    Unknown,
+    COBOL,
+    JCL
 }
 
 export class VSExtensionUtils {
+    private static readonly knownSchemes = [
+        "file",
+        "ftp",
+        "git",
+        "member",
+        "sftp",
+        "ssh",
+        "streamfile",
+        "untitled",
+        "vscode-vfs",
+        "zip",
+    ];
+
+    private static readonly bmsColumnNumber = /^([0-9]{6}).*$/g;
 
     public static isSupportedLanguage(document: vscode.TextDocument): TextLanguage {
-
         switch (document.languageId.toLowerCase()) {
             case "cobolit":
             case "bitlang-cobol":
@@ -21,159 +34,95 @@ export class VSExtensionUtils {
                 return TextLanguage.COBOL;
             case "jcl":
                 return TextLanguage.JCL;
+            default:
+                return TextLanguage.Unknown;
         }
-
-        /* not a supported language? */
-        return TextLanguage.Unknown;
     }
-
-    private static readonly knownSchemes: string[] = [
-        "file",
-        "ftp",
-        "git",
-        "member",
-        "sftp",
-        "ssh",
-        "streamfile",
-        "untitled",
-        "vscode-vfs",
-        "zip"
-    ];
 
     public static isKnownScheme(scheme: string): boolean {
-        for (const kscheme of VSExtensionUtils.knownSchemes) {
-            if (scheme === kscheme) {
-                return true;
-            }
-        }
-        return false;
+        return this.knownSchemes.includes(scheme);
     }
 
-    public static getAllCobolSelectors(config: ICOBOLSettings, for_intellisense: boolean): vscode.DocumentSelector {
-        const ret = [];
-
-        for (const langid of for_intellisense ? config.valid_cobol_language_ids_for_intellisense : config.valid_cobol_language_ids) {
-            for (const kscheme of VSExtensionUtils.knownSchemes) {
-                ret.push(
-                    { scheme: kscheme, language: langid },
-                )
-            }
-        }
-
-        return ret;
+    public static isKnownCOBOLLanguageId(config: ICOBOLSettings, langId: string): boolean {
+        return config.valid_cobol_language_ids.includes(langId);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    public static getAllMFProvidersSelectors(config: ICOBOLSettings): vscode.DocumentSelector {
-        const ret = [];
-
-        for (const kscheme of VSExtensionUtils.knownSchemes) {
-            ret.push(
-                { scheme: kscheme, language: "directivesmf" },
-            )
-        }
-
-        return ret;
+    public static isKnownPLILanguageId(_: ICOBOLSettings, langId: string): boolean {
+        return langId.toLowerCase() === "pli";
     }
 
-    public static getAllCobolSelector(langid: string): vscode.DocumentSelector {
-        const ret = [];
+    public static getAllCobolSelectors(
+        config: ICOBOLSettings,
+        forIntelliSense: boolean
+    ): vscode.DocumentSelector {
+        const ids = forIntelliSense
+            ? config.valid_cobol_language_ids_for_intellisense
+            : config.valid_cobol_language_ids;
 
-        for (const kscheme of VSExtensionUtils.knownSchemes) {
-            ret.push(
-                { scheme: kscheme, language: langid },
-            )
-        }
-
-        return ret;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    public static getAllJCLSelectors(config: ICOBOLSettings): vscode.DocumentSelector {
-        const ret = [];
-
-        for (const kscheme of VSExtensionUtils.knownSchemes) {
-            ret.push(
-                { scheme: kscheme, language: "JCL" },
-            )
-        }
-
-        return ret;
+        return ids.flatMap(langId =>
+            this.knownSchemes.map(scheme => ({ scheme, language: langId }))
+        );
     }
 
-    public static isKnownCOBOLLanguageId(config: ICOBOLSettings, possibleLangid: string): boolean {
-        for (const langid of config.valid_cobol_language_ids) {
-            if (possibleLangid === langid) {
-                return true;
+    public static getAllMFProvidersSelectors(_: ICOBOLSettings): vscode.DocumentSelector {
+        return this.knownSchemes.map(scheme => ({ scheme, language: "directivesmf" }));
+    }
+
+    public static getAllCobolSelector(langId: string): vscode.DocumentSelector {
+        return this.knownSchemes.map(scheme => ({ scheme, language: langId }));
+    }
+
+    public static getAllJCLSelectors(_: ICOBOLSettings): vscode.DocumentSelector {
+        return this.knownSchemes.map(scheme => ({ scheme, language: "JCL" }));
+    }
+
+    public static flipPlaintext(doc: vscode.TextDocument): void {
+        if (!doc) return;
+
+        const { languageId, lineCount, uri } = doc;
+
+        // Detect AcuBench COBOL
+        if (languageId.toLowerCase() === "cobol" && lineCount >= 3) {
+            const firstLine = doc.lineAt(0).text;
+            const secondLine = doc.lineAt(1).text;
+            if (firstLine.includes("*{Bench}") || secondLine.includes("*{Bench}")) {
+                vscode.languages.setTextDocumentLanguage(doc, "ACUCOBOL");
+                return;
             }
         }
 
-        return false;
-    }
+        // Detect COBOL list files
+        if (["plaintext", "tsql"].includes(languageId) && lineCount >= 3) {
+            const firstLine = doc.lineAt(0).text;
+            const secondLine = doc.lineAt(1).text;
 
-    public static isKnownPLILanguageId(config: ICOBOLSettings, possibleLangid: string): boolean {
-        return (possibleLangid.toLowerCase() === "pli");
-    }
+            if (firstLine.charCodeAt(0) === 12 && secondLine.startsWith("* Micro Focus COBOL ")) {
+                vscode.languages.setTextDocumentLanguage(doc, "COBOL_MF_LISTFILE");
+                return;
+            }
 
-    private static readonly bmsColumnNumber = /^([0-9][0-9][0-9][0-9][0-9][0-9]).*$/g;
+            if (firstLine.startsWith("Pro*COBOL: Release")) {
+                vscode.languages.setTextDocumentLanguage(doc, "COBOL_PCOB_LISTFILE");
+                return;
+            }
 
-    public static flip_plaintext(doc: vscode.TextDocument): void {
-        if (doc === undefined) {
-            return;
-        }
-
-        // flip to ACUCOBOL if the source file looks like it a Acubench generated file
-        if (doc.languageId === "COBOL" || doc.languageId === "cobol") {
-            const lineCount = doc.lineCount;
-            if (lineCount >= 3) {
-                const firstLine = doc.lineAt((0)).text;
-                const secondLine = doc.lineAt(1).text;
-
-                if ((firstLine.indexOf("*{Bench}") !== -1) || ((secondLine.indexOf("*{Bench}") !== -1))) {
-                    vscode.languages.setTextDocumentLanguage(doc, "ACUCOBOL");
-                    return;
-                }
+            if (firstLine.includes("ACUCOBOL-GT ") && firstLine.includes("Page:")) {
+                vscode.languages.setTextDocumentLanguage(doc, "COBOL_ACU_LISTFILE");
+                return;
             }
         }
 
-        if (doc.languageId === "plaintext" || doc.languageId === "tsql") {  // one tsql ext grabs .lst!
-            const lineCount = doc.lineCount;
-            if (lineCount >= 3) {
-                const firstLine = doc.lineAt((0)).text;
-                const secondLine = doc.lineAt(1).text;
-
-                if ((firstLine.length >= 1 && firstLine.charCodeAt(0) === 12) && secondLine.startsWith("* Micro Focus COBOL ")) {
-                    vscode.languages.setTextDocumentLanguage(doc, "COBOL_MF_LISTFILE");
-                    return;
-                }
-
-                //NOTE: If we have more.. refactor..
-                if (firstLine.startsWith("Pro*COBOL: Release")) {
-                    vscode.languages.setTextDocumentLanguage(doc, "COBOL_PCOB_LISTFILE");
-                    return;
-                }
-
-                if ((firstLine.indexOf("ACUCOBOL-GT ") !== -1) && (firstLine.indexOf("Page:") !== -1)) {
-                    vscode.languages.setTextDocumentLanguage(doc, "COBOL_ACU_LISTFILE");
-                    return;
-                }
-            }
-        }
-
-        if (doc.uri.fsPath.endsWith(".map") && !doc.languageId.startsWith("bms")) {
-            const maxLines = doc.lineCount < 10 ? doc.lineCount : 10;
-            for (let lcount = 1; lcount <= maxLines; lcount++) {
-                const qline = doc.lineAt(lcount).text;
-                if (qline.indexOf("DFHMSD") !== -1) {
-                    if (qline.match(VSExtensionUtils.bmsColumnNumber)) {
-                        vscode.languages.setTextDocumentLanguage(doc, "bmsmap");
-                        return;
-                    }
-                    vscode.languages.setTextDocumentLanguage(doc, "bms");
+        // Detect BMS map files
+        if (uri.fsPath.endsWith(".map") && !languageId.startsWith("bms")) {
+            const maxLines = Math.min(lineCount, 10);
+            for (let i = 0; i < maxLines; i++) {
+                const line = doc.lineAt(i).text;
+                if (line.includes("DFHMSD")) {
+                    const targetLang = line.match(this.bmsColumnNumber) ? "bmsmap" : "bms";
+                    vscode.languages.setTextDocumentLanguage(doc, targetLang);
                     return;
                 }
             }
         }
     }
-
-
 }
