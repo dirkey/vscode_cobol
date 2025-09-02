@@ -222,96 +222,88 @@ class StreamToken {
     static readonly Blank = new StreamToken("", "", false, 0, 0);
 }
 
-class StreamTokens {
+class StreamTokens implements Iterable<StreamToken> {
     public currentToken = "";
     public currentTokenLower = "";
     public currentCol = 0;
     public currentLineNumber: number;
     public endsWithDot = false;
 
-    public prevTokenLower = "";
     public prevToken = "";
-    public prevTokenLineNumber: number = 0;
-    public prevCurrentCol: number = 0;
+    public prevTokenLower = "";
+    public prevTokenLineNumber = 0;
+    public prevCurrentCol = 0;
 
     private tokenIndex = 0;
-    private stokens: StreamToken[] = [];
+    private readonly stokens: StreamToken[] = [];
 
-    public constructor(line: string, lineNumber: number, previousToken: StreamTokens | undefined) {
-        const lineTokens: string[] = [];
-        // this.prevTokenToken = previousToken;
+    public static readonly Blank = new StreamTokens("", 0);
+
+    constructor(line: string, lineNumber: number, previousToken?: StreamTokens) {
         this.currentLineNumber = lineNumber;
-        if (previousToken !== undefined) {
+
+        if (previousToken) {
             this.prevToken = previousToken.currentToken;
             this.prevTokenLineNumber = previousToken.currentLineNumber;
         }
-        SplitTokenizer.splitArgument(line, lineTokens);
-        let rollingColumn = 0;
-        for (let c = 0; c < lineTokens.length; c++) {
-            const currentToken = lineTokens[c];
-            const currentTokenLower = currentToken.toLowerCase();
 
-            rollingColumn = line.indexOf(currentToken, rollingColumn);
-
-            const endsWithDot = currentToken.length === 0 ? false : currentToken.charAt(currentToken.length - 1) === ".";
-            this.stokens.push(new StreamToken(currentToken, currentTokenLower, endsWithDot, lineNumber, rollingColumn));
-            rollingColumn += currentToken.length;
-        }
-        this.tokenIndex = 0;
+        this.tokenize(line, lineNumber);
         this.setupNextToken();
 
-        if (previousToken !== undefined) {
-            // wire in previous token into this token
-            if (previousToken.stokens.length > 0) {
-                const prevTokenId = previousToken.stokens.length - 1;
-                this.prevToken = previousToken.stokens[prevTokenId].currentToken;
-                this.prevTokenLower = previousToken.stokens[prevTokenId].currentTokenLower;
-                this.prevCurrentCol = previousToken.stokens[prevTokenId].currentCol;
-            }
+        if (previousToken && previousToken.stokens.length > 0) {
+            const last = previousToken.stokens.at(-1)!;
+            this.prevToken = last.currentToken;
+            this.prevTokenLower = last.currentTokenLower;
+            this.prevCurrentCol = last.currentCol;
         }
     }
 
-    public static readonly Blank = new StreamTokens("", 0, undefined);
+    private tokenize(line: string, lineNumber: number): void {
+        const lineTokens: string[] = [];
+        SplitTokenizer.splitArgument(line, lineTokens);
+
+        let rollingColumn = 0;
+        for (const token of lineTokens) {
+            const lower = token.toLowerCase();
+            rollingColumn = line.indexOf(token, rollingColumn);
+
+            const endsWithDot = token.endsWith(".");
+            this.stokens.push(
+                new StreamToken(token, lower, endsWithDot, lineNumber, rollingColumn)
+            );
+
+            rollingColumn += token.length;
+        }
+    }
 
     public nextSTokenOrBlank(): StreamToken {
-        if (1 + this.tokenIndex >= this.stokens.length) {
-            return StreamToken.Blank;
-        }
-
-        return this.stokens[1 + this.tokenIndex];
+        return this.stokens[this.tokenIndex + 1] ?? StreamToken.Blank;
     }
 
-    public nextSTokenIndex(index: number): StreamToken {
-        const nextIndex = this.tokenIndex + index;
-        if (nextIndex >= this.stokens.length || nextIndex < 0) {
-            return StreamToken.Blank;
-        }
-
-        return this.stokens[nextIndex];
+    public nextSTokenIndex(offset: number): StreamToken {
+        return this.stokens[this.tokenIndex + offset] ?? StreamToken.Blank;
     }
 
-    public compoundItems(startCompound: string) {
-        if (this.endsWithDot) {
-            return startCompound;
-        }
-
-        if (1 + this.tokenIndex >= this.stokens.length) {
+    public compoundItems(startCompound: string): string {
+        if (this.endsWithDot || this.tokenIndex + 1 >= this.stokens.length) {
             return startCompound;
         }
 
         let comp = startCompound;
         let addNext = false;
-        for (let sc = 1 + this.tokenIndex; sc < this.stokens.length; sc++) {
-            const stok = this.stokens[sc];
-            const trimCurrent = COBOLSourceScanner.trimLiteral(stok.currentToken, false);
+
+        for (const stok of this.stokens.slice(this.tokenIndex + 1)) {
+            const trimmed = COBOLSourceScanner.trimLiteral(stok.currentToken, false);
+
             if (stok.endsWithDot) {
-                return comp + " " + trimCurrent;
+                return `${comp} ${trimmed}`;
             }
+
             if (addNext) {
-                comp += " " + trimCurrent;
+                comp += ` ${trimmed}`;
                 addNext = false;
             } else if (stok.currentToken === "&") {
-                comp += " " + trimCurrent;
+                comp += ` ${trimmed}`;
                 addNext = true;
             } else {
                 return comp;
@@ -321,14 +313,14 @@ class StreamTokens {
         return comp;
     }
 
-    private setupNextToken() {
+    private setupNextToken(): void {
         this.prevToken = this.currentToken;
         this.prevTokenLower = this.currentTokenLower;
         this.prevTokenLineNumber = this.currentLineNumber;
         this.prevCurrentCol = this.currentCol;
 
-        const stok: StreamToken = this.stokens[this.tokenIndex];
-        if (stok !== undefined) {
+        const stok = this.stokens[this.tokenIndex];
+        if (stok) {
             this.currentToken = stok.currentToken;
             this.currentTokenLower = stok.currentTokenLower;
             this.endsWithDot = stok.endsWithDot;
@@ -343,50 +335,46 @@ class StreamTokens {
     }
 
     public moveToNextToken(): boolean {
-        if (1 + this.tokenIndex > this.stokens.length) {
+        if (this.tokenIndex + 1 > this.stokens.length) {
             return true;
         }
-
         this.tokenIndex++;
         this.setupNextToken();
         return false;
     }
 
-    public endToken() {
+    public endToken(): void {
         this.tokenIndex = this.stokens.length;
     }
 
     public isTokenPresent(possibleToken: string): boolean {
-        const possibleTokenLower = possibleToken.toLowerCase();
-        const possibleTokenLowerDot = possibleTokenLower + ".";
+        const lower = possibleToken.toLowerCase();
+        return this.stokens.some(
+            t => t.currentTokenLower === lower || t.currentTokenLower === `${lower}.`
+        );
+    }
 
-        for (let c = 0; c < this.stokens.length; c++) {
-            if (this.stokens[c].currentTokenLower === possibleTokenLower) {
-                return true;
-            }
-            if (this.stokens[c].currentTokenLower === possibleTokenLowerDot) {
-                return true;
-            }
+    // 🔹 Generator-based iterator
+    public *[Symbol.iterator](): Generator<StreamToken> {
+        for (const token of this.stokens) {
+            yield token;
         }
-
-        return false;
     }
 }
 
-export class replaceToken {
-    public readonly rex4wordreplace: RegExp;
+export class ReplaceToken {
+    public readonly pattern: RegExp;
 
-    constructor(replaceTokenRaw: string, tokenState: IReplaceState) {
-        const escapedToken = replaceToken.escapeRegExp(replaceTokenRaw);
-        if (tokenState.isPseudoTextDelimiter) {
-            this.rex4wordreplace = new RegExp(`${escapedToken}`, "g");
-        } else {
-            this.rex4wordreplace = new RegExp(`\\b${escapedToken}\\b`, "g");
-        }
+    constructor(rawToken: string, tokenState: IReplaceState) {
+        const escaped = ReplaceToken.escapeRegExp(rawToken);
+        this.pattern = tokenState.isPseudoTextDelimiter
+            ? new RegExp(escaped, "g")
+            : new RegExp(`\\b${escaped}\\b`, "g");
     }
 
     private static escapeRegExp(text: string): string {
-        return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&");
+        // Escapes regex metacharacters so they are treated literally
+        return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     }
 }
 
@@ -415,7 +403,7 @@ export class copybookState implements IReplaceState {
     public literal2 = "";
     public library_name = "";
     public replaceLeft = "";
-    public copyReplaceMap = new Map<string, replaceToken>();
+    public copyReplaceMap = new Map<string, ReplaceToken>();
     public isTrailing = false;
     public isLeading = false;
     public fileName = "";
@@ -608,7 +596,7 @@ export class ParseState {
     using: UsingState = UsingState.BY_REF;
     parameters: COBOLParameter[] = [];
     entryPointCount = 0;
-    replaceMap = new Map<string, replaceToken>();
+    replaceMap = new Map<string, ReplaceToken>();
     enable_text_replacement: boolean;
     copybook_state: copybookState;
     inCopyStartColumn = 0;
@@ -646,7 +634,6 @@ export class CallTargetInformation {
 
 
 export class EmptyCOBOLSourceScannerEventHandler implements ICOBOLSourceScannerEvents {
-
     static readonly Default = new EmptyCOBOLSourceScannerEventHandler();
 
     start(qp: ICOBOLSourceScanner): void {
@@ -1857,7 +1844,7 @@ export class COBOLSourceScanner implements ICommentCallback, ICOBOLSourceScanner
                     let rightLine = line.substring(token.currentCol);
                     const rightLineOrg = line.substring(token.currentCol);
                     for (const [k, r] of state.replaceMap) {
-                        rightLine = rightLine.replace(r.rex4wordreplace, k);
+                        rightLine = rightLine.replace(r.pattern, k);
                     }
 
                     if (rightLine !== rightLineOrg) {
@@ -2073,7 +2060,7 @@ export class COBOLSourceScanner implements ICommentCallback, ICOBOLSourceScanner
                                     else
                                         rs.isPseudoTextDelimiter = false;
 
-                                    state.replaceMap.set(cleanedUpRight[0], new replaceToken(cleanedUpLeft[0], rs));
+                                    state.replaceMap.set(cleanedUpRight[0], new ReplaceToken(cleanedUpLeft[0], rs));
                                     state.replaceLeft = state.replaceRight = "";
                                     state.captureReplaceLeft = true;
                                 }
@@ -2133,7 +2120,7 @@ export class COBOLSourceScanner implements ICommentCallback, ICOBOLSourceScanner
                                         else
                                             rs.isPseudoTextDelimiter = false;
 
-                                        cbState.copyReplaceMap.set(cleanedUpRight[0], new replaceToken(cleanedUpLeft[0], rs));
+                                        cbState.copyReplaceMap.set(cleanedUpRight[0], new ReplaceToken(cleanedUpLeft[0], rs));
                                     }
                                     cbState.isReplacingBy = false;
                                     cbState.isReplacing = true;
@@ -3077,7 +3064,7 @@ export class COBOLSourceScanner implements ICommentCallback, ICOBOLSourceScanner
                 const prevRepMap = state.replaceMap;
 
                 if (this.configHandler.enable_text_replacement) {
-                    state.replaceMap = new Map<string, replaceToken>([...cbInfo.copyReplaceMap, ...prevRepMap]);
+                    state.replaceMap = new Map<string, ReplaceToken>([...cbInfo.copyReplaceMap, ...prevRepMap]);
                 }
                 // eslint-disable-next-line @typescript-eslint/no-unused-vars
                 if (this.ScanUncachedInlineCopybook(qfile, this, false) == false) {

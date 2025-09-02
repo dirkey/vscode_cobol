@@ -2,12 +2,9 @@
     "compilerOptions": {
         "experimentalDecorators": true,
         "module": "commonjs",
-        "target": "es2020",
+        "target": "ES2022",
         "outDir": "out",
-        "lib": [
-            "ES2020",
-            "es2020.string"
-        ],
+        "lib": ["ES2022", "DOM"],
         "sourceMap": true,
         "rootDir": "src",
         "declaration": true,
