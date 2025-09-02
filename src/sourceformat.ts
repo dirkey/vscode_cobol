@@ -7,19 +7,25 @@ import { getCOBOLKeywordDictionary } from "./keywords/cobolKeywords";
 const INLINE_SOURCE_FORMAT: string[] = ["sourceformat", ">>source format"];
 
 class LineAnalyzer {
+    private line: string;
+    private keywords: Set<string>;
+    private isTerminal: boolean;
     public validFixedLine = false;
     public hasKeywordAtColumn0 = false;
     public formatDetected?: ESourceFormat;
 
     constructor(
-        private line: string,
-        private keywords: Set<string>,
-        private isTerminal: boolean
+        line: string,
+        keywords: Set<string>,
+        isTerminal: boolean
     ) {
+        this.line = line;
+        this.keywords = keywords;
+        this.isTerminal = isTerminal;
         this.analyze();
     }
 
-    private analyze() {
+    private analyze(): void {
         const trimmedLine = this.line.trimEnd();
         if (!trimmedLine) return;
 
@@ -35,15 +41,10 @@ class LineAnalyzer {
         }
 
         // Inline source format detection
-        for (const token of INLINE_SOURCE_FORMAT) {
-            const idx = lowerLine.indexOf(token);
-            if (idx !== -1) {
-                const remainder = lowerLine.substring(idx + token.length + 1);
-                if (remainder.includes("fixed")) this.formatDetected = ESourceFormat.fixed;
-                else if (remainder.includes("variable")) this.formatDetected = ESourceFormat.variable;
-                else if (remainder.includes("free")) this.formatDetected = ESourceFormat.free;
-                return;
-            }
+        const format = this.detectInlineSourceFormat(lowerLine);
+        if (format) {
+            this.formatDetected = format;
+            return;
         }
 
         // Free/variable heuristics
@@ -61,6 +62,19 @@ class LineAnalyzer {
         let firstWord = lowerLine.split(" ")[0].replace(/\.$/, "");
         if (firstWord && this.keywords.has(firstWord)) this.hasKeywordAtColumn0 = true;
     }
+
+    private detectInlineSourceFormat(lowerLine: string): ESourceFormat | undefined {
+        for (const token of INLINE_SOURCE_FORMAT) {
+            const idx = lowerLine.indexOf(token);
+            if (idx !== -1) {
+                const remainder = lowerLine.substring(idx + token.length + 1);
+                if (remainder.includes("fixed")) return ESourceFormat.fixed;
+                else if (remainder.includes("variable")) return ESourceFormat.variable;
+                else if (remainder.includes("free")) return ESourceFormat.free;
+            }
+        }
+        return undefined;
+    }
 }
 
 export class SourceFormat {
@@ -77,7 +91,9 @@ export class SourceFormat {
                         default: return undefined;
                     }
                 }
-            } catch {}
+            } catch {
+                // Ignore invalid patterns
+            }
         }
         return undefined;
     }
@@ -91,22 +107,17 @@ export class SourceFormat {
         skippedLines: number,
         isTerminal: boolean
     ): ESourceFormat {
-        let defFormat: ESourceFormat = ESourceFormat.unknown;
-
         // Heuristics
         if (keywordAtColumn0 >= 2 && invalidFixedLines >= 2) {
-            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.free;
-        }
-
-        if (defFormat === ESourceFormat.unknown) {
-            defFormat = isTerminal ? ESourceFormat.terminal : ESourceFormat.variable;
+            return isTerminal ? ESourceFormat.terminal : ESourceFormat.free;
         }
 
         if (invalidFixedLines === 0 && linesGT80 === 0 && (validFixedLines + skippedLines === maxLines)) {
             return ESourceFormat.fixed;
         }
 
-        return defFormat;
+        // Default to variable or terminal based on context
+        return isTerminal ? ESourceFormat.terminal : ESourceFormat.variable;
     }
 
     public static get(doc: ISourceHandlerLite, config: ICOBOLSettings): ESourceFormat {
@@ -119,8 +130,9 @@ export class SourceFormat {
         }
 
         // File-based overrides
+        let fileFormat: ESourceFormat | undefined;
         if (config.check_file_format_before_file_scan) {
-            const fileFormat = this.getFileFormat(doc, config);
+            fileFormat = this.getFileFormat(doc, config);
             if (fileFormat) return fileFormat;
         }
 
@@ -166,7 +178,7 @@ export class SourceFormat {
 
         // Late file-based override
         if (!config.check_file_format_before_file_scan) {
-            const fileFormat = this.getFileFormat(doc, config);
+            fileFormat = this.getFileFormat(doc, config);
             return fileFormat ?? defFormat;
         }
 

@@ -135,8 +135,8 @@ async function setupLogChannelAndPaths(hide: boolean, settings: ICOBOLSettings) 
     }
 
     if (settings.maintain_metadata_recursive_search) {
-        VSCOBOLUtils.populateDefaultCallableSymbolsSync(settings, true);
-        VSCOBOLUtils.populateDefaultCopyBooksSync(settings, true);
+        VSCOBOLUtils.populateDefaultCallableSymbols(settings, true);
+        VSCOBOLUtils.populateDefaultCopyBooks(settings, true);
     }
 }
 

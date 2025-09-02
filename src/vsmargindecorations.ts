@@ -14,23 +14,24 @@ import { VSExternalFeatures } from "./vsexternalfeatures";
 
 const defaultTrailingSpacesDecoration: TextEditorDecorationType = window.createTextEditorDecorationType({
     light: {
-        // backgroundColor: "rgba(255,0,0,1)",
-        // color: "rgba(0,0,0,1)",
         color: new ThemeColor("editorLineNumber.foreground"),
         backgroundColor: new ThemeColor("editor.background"),
         textDecoration: "solid"
     },
     dark: {
-        // backgroundColor: "rgba(255,0,0,1)",
-        // color: "rgba(0,0,0,1)"
         color: new ThemeColor("editorLineNumber.foreground"),
         backgroundColor: new ThemeColor("editor.background"),
         textDecoration: "solid"
     }
 });
 
-export class VSmargindecorations extends ColourTagHandler {
+interface MarginRange {
+    start: number;
+    end: number;
+    maxTagLength: number;
+}
 
+export class VSmargindecorations extends ColourTagHandler {
     private tags = new Map<string, TextEditorDecorationType>();
 
     constructor() {
@@ -43,236 +44,131 @@ export class VSmargindecorations extends ColourTagHandler {
     }
 
     private isEnabledViaWorkspace4jcl(settings: ICOBOLSettings): boolean {
-        if (VSWorkspaceFolders.get(settings) === undefined) {
-            return false;
-        }
-
-        const editorConfig = workspace.getConfiguration("jcleditor");
-        const marginOn = editorConfig.get<boolean>("margin");
-        if (marginOn !== undefined) {
-            return marginOn;
-        }
-        return true;
+        if (!VSWorkspaceFolders.get(settings)) return false;
+        return workspace.getConfiguration("jcleditor").get<boolean>("margin") ?? true;
     }
 
-    private async updateJCLDecorations(doc: TextDocument, activeTextEditor: TextEditor, defaultTrailingSpacesDecoration: TextEditorDecorationType) {
-        const defaultDecorationOptions: DecorationOptions[] = [];
+    private async updateJCLDecorations(doc: TextDocument, activeTextEditor: TextEditor, decoration: TextEditorDecorationType) {
+        const decorations: DecorationOptions[] = [];
         for (let i = 0; i < doc.lineCount; i++) {
-            const lineText = doc.lineAt(i);
-            const line = lineText.text;
-
+            const line = doc.lineAt(i).text;
             if (line.length > 72) {
-                const startPos = new Position(i, 72);
-                const endPos = new Position(i, line.length);
-                const decoration = { range: new Range(startPos, endPos) };
-                defaultDecorationOptions.push(decoration);
+                decorations.push({ range: new Range(new Position(i, 72), new Position(i, line.length)) });
             }
         }
-        activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorationOptions);
+        activeTextEditor.setDecorations(decoration, decorations);
     }
 
-    // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
-    public async updateDecorations(activeTextEditor: TextEditor | undefined) {
-        if (!activeTextEditor) {
-            return;
+    private addDecorationsForColumnRange(
+        line: string,
+        lineIndex: number,
+        rangeDef: MarginRange,
+        declsMap: Map<string, DecorationOptions[]>,
+        defaultDecorations: DecorationOptions[],
+        enableTags: boolean
+    ) {
+        const rangeStart = rangeDef.start;
+        const rangeEnd = Math.min(line.length, rangeDef.end);
+        const baseDecoration: DecorationOptions = { range: new Range(new Position(lineIndex, rangeStart), new Position(lineIndex, rangeEnd)) };
+        let useDefault = true;
+
+        if (enableTags) {
+            const text = line.slice(rangeStart, rangeEnd);
+            for (const [tag] of this.tags) {
+                if (tag.length > rangeDef.maxTagLength) continue;
+                const tagIndex = text.indexOf(tag);
+                if (tagIndex !== -1) {
+                    const items = declsMap.get(tag);
+                    if (!items) continue;
+                    useDefault = false;
+                    const tagRange = new Range(
+                        new Position(lineIndex, rangeStart + tagIndex),
+                        new Position(lineIndex, rangeStart + tagIndex + tag.length)
+                    );
+                    items.push({ range: tagRange });
+
+                    // add left and right colors if necessary
+                    if (tagIndex > 0) defaultDecorations.push({ range: new Range(new Position(lineIndex, rangeStart), new Position(lineIndex, rangeStart + tagIndex)) });
+                    if (tagIndex + tag.length < rangeDef.maxTagLength) defaultDecorations.push({ range: new Range(new Position(lineIndex, rangeStart + tagIndex + tag.length), new Position(lineIndex, rangeStart + rangeDef.maxTagLength)) });
+                }
+            }
         }
 
-        const doc: TextDocument = activeTextEditor.document;
-        const defaultDecorationOptions: DecorationOptions[] = [];
+        if (useDefault) {
+            defaultDecorations.push(baseDecoration);
+        }
+    }
+
+    public async updateDecorations(activeTextEditor: TextEditor | undefined) {
+        if (!activeTextEditor) return;
+
+        const doc = activeTextEditor.document;
+        const defaultDecorations: DecorationOptions[] = [];
         const configHandler = VSCOBOLConfiguration.get_resource_settings(doc, VSExternalFeatures);
-        const textLanguage: TextLanguage = VSExtensionUtils.isSupportedLanguage(doc);
+        const textLanguage = VSExtensionUtils.isSupportedLanguage(doc);
 
         if (textLanguage === TextLanguage.Unknown) {
-            activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorationOptions);
+            activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorations);
             return;
         }
 
-        /* is it enabled? */
         if (textLanguage === TextLanguage.JCL) {
             if (!this.isEnabledViaWorkspace4jcl(configHandler)) {
-                activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorationOptions);
+                activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorations);
             } else {
                 await this.updateJCLDecorations(doc, activeTextEditor, defaultTrailingSpacesDecoration);
             }
             return;
         }
 
-        /* is it enabled? */
-        if (configHandler.margin === false) {
-            activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorationOptions);
+        if (!configHandler.margin) {
+            activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorations);
             return;
         }
 
         const declsMap = new Map<string, DecorationOptions[]>();
+        for (const tag of this.tags.keys()) declsMap.set(tag, []);
+
         let sf: ESourceFormat = ESourceFormat.unknown;
-
-        // check overrides..
         switch (configHandler.fileformat_strategy) {
-            case fileformatStrategy.AlwaysFixed:
-                sf = ESourceFormat.fixed;
-                break;
-            case fileformatStrategy.AlwaysVariable:
-                sf = ESourceFormat.variable;
-                break;
+            case fileformatStrategy.AlwaysFixed: sf = ESourceFormat.fixed; break;
+            case fileformatStrategy.AlwaysVariable: sf = ESourceFormat.variable; break;
             default:
-                {
-                    const gcp = VSCOBOLSourceScanner.getCachedObject(doc, configHandler);
-                    if (gcp === undefined) {
-                        const vsfile = new VSCodeSourceHandlerLite(doc);
-                        sf = SourceFormat.get(vsfile, configHandler);
-                    } else {
-                        sf = gcp.sourceFormat;
-                    }
-                    break;
-                }
+                const gcp = VSCOBOLSourceScanner.getCachedObject(doc, configHandler);
+                sf = gcp ? gcp.sourceFormat : SourceFormat.get(new VSCodeSourceHandlerLite(doc), configHandler);
+                break;
         }
 
-        let decSequenceNumber=true;
-        let decArea73_80=configHandler.margin_identification_area;
-
-        // use the known file format from the scan itself
-        switch (sf) {
-            case ESourceFormat.free:
-            case ESourceFormat.unknown:
-            case ESourceFormat.terminal:
-                activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorationOptions);
-                return;
+        if ([ESourceFormat.free, ESourceFormat.unknown, ESourceFormat.terminal].includes(sf)) {
+            activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorations);
+            return;
         }
 
-        if (sf == ESourceFormat.variable) {
-            decArea73_80 = false;
-        }
-
-
+        const decSequenceNumber = true;
+        const decArea73_80 = sf !== ESourceFormat.variable && configHandler.margin_identification_area;
         const maxLineLength = configHandler.editor_maxTokenizationLineLength;
-        const maxLines = doc.lineCount;
-        for (const [tag,] of this.tags) {
-            declsMap.set(tag, []);
-        }
 
-        for (let i = 0; i < maxLines; i++) {
-            const lineText = doc.lineAt(i);
-            const line = lineText.text;
-            if (line.length > maxLineLength) {
-                continue;
-            }
+        const columnRanges: MarginRange[] = [];
+        if (decSequenceNumber) columnRanges.push({ start: 0, end: 6, maxTagLength: 6 });
+        if (decArea73_80) columnRanges.push({ start: 72, end: 80, maxTagLength: 8 });
 
-            // only do it, if we have no tabs on the line..
+        for (let i = 0; i < doc.lineCount; i++) {
+            const line = doc.lineAt(i).text;
+            if (line.length > maxLineLength) continue;
             const containsTab = line.indexOf("\t");
 
-            if (decSequenceNumber && (containsTab === -1 || containsTab >= 6) && line.length >= 6) {
-                const startPos = new Position(i, 0);
-                const endPos = new Position(i, 6);
-                const rangePos = new Range(startPos, endPos);
-                const decoration = { range: rangePos };
-                let useDefault = true;
-
-                if (configHandler.enable_columns_tags) {
-                    const text = doc.getText(rangePos);
-                    if (text.length !== 0) {
-
-                        for (const [tag,] of this.tags) {
-                            // ignore tags too large for the left margin
-                            if (tag.length > 6) {
-                                continue;
-                            }
-
-                            const tagIndex = text.indexOf(tag);
-                            if (tagIndex !== -1) {
-                                const items = declsMap.get(tag);
-                                if (items !== undefined) {
-                                    useDefault = false;
-
-                                    if (tagIndex === 0 && tag.length === 6) {
-                                        items.push(decoration);
-                                    }
-                                    else {
-                                        const rangePosX = new Range(new Position(i, tagIndex), new Position(i, tagIndex + tag.length));
-                                        items.push({ range: rangePosX });
-
-                                        // add left colour
-                                        if (tagIndex !== 0) {
-                                            const rangePosL = new Range(new Position(i, 0), new Position(i, tagIndex));
-                                            defaultDecorationOptions.push({ range: rangePosL });
-                                        }
-
-                                        // add right color
-                                        if (tagIndex + tag.length !== 6) {
-                                            const rangePosR = new Range(new Position(i, tagIndex + tag.length), new Position(i, 6));
-                                            defaultDecorationOptions.push({ range: rangePosR });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    if (useDefault) {
-                        defaultDecorationOptions.push(decoration);
-                    }
-                }
-            }
-
-            if (decArea73_80 && (containsTab === -1 || containsTab > 80) && line.length > 72) {
-                // only colour 72-80
-                const rangePos = new Range(new Position(i, 72), new Position(i, (line.length < 80 ? line.length : 80)));
-                const decoration = { range: rangePos };
-                let useDefault = true;
-
-                if (configHandler.enable_columns_tags) {
-                    const text = doc.getText(rangePos);
-                    if (text.length !== 0) {
-
-                        for (const [tag,] of this.tags) {
-                            // ignore tags too large for the left margin
-                            if (tag.length > 8) {
-                                continue;
-                            }
-                            const tagIndex = text.indexOf(tag);
-                            if (tagIndex !== -1) {
-                                const items = declsMap.get(tag);
-                                if (items !== undefined) {
-                                    useDefault = false;
-
-                                    if (tagIndex === 0 && tag.length === 8) {
-                                        items.push(decoration);
-                                    }
-                                    else {
-                                        const rangePosX = new Range(new Position(i, 72 + tagIndex), new Position(i, 72 + tagIndex + tag.length));
-                                        items.push({ range: rangePosX });
-
-                                        // add left colour
-                                        if (tagIndex !== 0) {
-                                            const rangePosL = new Range(new Position(i, 72), new Position(i, 72 + tagIndex));
-                                            defaultDecorationOptions.push({ range: rangePosL });
-                                        }
-
-                                        // add right color
-                                        if (tagIndex + tag.length !== 8) {
-                                            const rangePosR = new Range(new Position(i, 72 + tagIndex + tag.length), new Position(i, 72 + 8));
-                                            defaultDecorationOptions.push({ range: rangePosR });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    if (useDefault) {
-                        defaultDecorationOptions.push(decoration);
-                    }
+            for (const rangeDef of columnRanges) {
+                if (containsTab === -1 || (rangeDef.start === 0 ? containsTab >= 6 : containsTab > 80)) {
+                    this.addDecorationsForColumnRange(line, i, rangeDef, declsMap, defaultDecorations, configHandler.enable_columns_tags);
                 }
             }
         }
 
         for (const [tag, decls] of declsMap) {
             const typeDecl = this.tags.get(tag);
-            if (typeDecl !== undefined) {
-                activeTextEditor.setDecorations(typeDecl, decls);
-            }
-
+            if (typeDecl) activeTextEditor.setDecorations(typeDecl, decls);
         }
-        activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorationOptions);
+        activeTextEditor.setDecorations(defaultTrailingSpacesDecoration, defaultDecorations);
     }
 }
 

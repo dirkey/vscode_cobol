@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { COBOLTokenStyle, COBOLToken, COBOLVariable } from "./cobolsourcescanner";
+import { COBOLToken, COBOLVariable } from "./cobolsourcescanner";
 import { VSCOBOLSourceScanner } from "./vscobolscanner";
 import { VSCOBOLConfiguration } from "./vsconfiguration";
 import { ICOBOLSettings } from "./iconfiguration";
@@ -10,245 +10,159 @@ import { VSExternalFeatures } from "./vsexternalfeatures";
 import { ICOBOLSourceScanner } from "./icobolsourcescanner";
 
 export class COBOLSourceDefinition implements vscode.DefinitionProvider {
+    // 🔒 Regex are fully immutable and typed
+    private static readonly sectionRegEx = /[$0-9a-zA-Z][a-zA-Z0-9-_]*/;
+    private static readonly variableRegEx = /[$#0-9a-zA-Z_][a-zA-Z0-9-_]*/;
+    private static readonly classRegEx = /[$0-9a-zA-Z][a-zA-Z0-9-_]*/;
+    private static readonly methodRegEx = /[$0-9a-zA-Z][a-zA-Z0-9-_]*/;
 
-    readonly sectionRegEx = new RegExp("[$0-9a-zA-Z][a-zA-Z0-9-_]*");
-    readonly variableRegEx = new RegExp("[$#0-9a-zA-Z_][a-zA-Z0-9-_]*");
-    readonly classRegEx = new RegExp("[$0-9a-zA-Z][a-zA-Z0-9-_]*");
-    readonly methodRegEx = new RegExp("[$0-9a-zA-Z][a-zA-Z0-9-_]*");
-
-    public provideDefinition(document: vscode.TextDocument,
+    public provideDefinition(
+        document: vscode.TextDocument,
         position: vscode.Position,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        token: vscode.CancellationToken): vscode.ProviderResult<vscode.Definition> {
+        _token: vscode.CancellationToken
+    ): vscode.ProviderResult<vscode.Definition> {
         const locations: vscode.Location[] = [];
+        const config: ICOBOLSettings = VSCOBOLConfiguration.get_resource_settings(document, VSExternalFeatures);
+        const lineText: string = document.lineAt(position.line).text;
 
-        let loc;
-        const config = VSCOBOLConfiguration.get_resource_settings(document, VSExternalFeatures);
+        const qcp: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document, config);
 
-        const theline = document.lineAt(position.line).text;
-        if (theline.match(/.*(perform|thru|go\s*to|until|varying).*$/i)) {
-            const qcp: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document,config);
-            if (qcp === undefined) {
-                return locations;
-            }
-
-            loc = this.getSectionOrParaLocation(document, qcp, position);
-            if (loc) {
-                locations.push(loc);
-                return locations;
-            }
+        if (/.*(perform|thru|go\s*to|until|varying).*$/i.test(lineText) && qcp) {
+            const loc = this.getSectionOrParaLocation(document, qcp, position);
+            if (loc) return [loc];
         }
 
-        if (theline.match(/.*(new\s*|type).*$/i)) {
-            const qcp: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document,config);
-            if (qcp === undefined) {
-                return locations;
-            }
-
-            loc = this.getClassTarget(document, qcp, position);
-            if (loc !== undefined) {
-                locations.push(loc);
-                return locations;
-            }
+        if (/.*(new\s*|type).*$/i.test(lineText) && qcp) {
+            const loc = this.getClassTarget(document, qcp, position);
+            if (loc) return [loc];
         }
 
-        if (theline.match(/.*(invoke\s*|::)(.*$)/i)) {
-            const qcp: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document, config);
-            if (qcp === undefined) {
-                return locations;
-            }
-            loc = this.getMethodTarget(document, qcp, position);
-            if (loc !== undefined) {
-                locations.push(loc);
-                return locations;
-            }
+        if (/.*(invoke\s*|::).*$/i.test(lineText) && qcp) {
+            const loc = this.getMethodTarget(document, qcp, position);
+            if (loc) return [loc];
         }
 
-        /* is it a known variable? */
         if (this.getVariableInCurrentDocument(locations, document, position, config)) {
             return locations;
         }
 
-        /* is it a sql cursor? */
-        const qcp: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document,config);
-        if (qcp !== undefined) {
-            if (VSCOBOLSourceScannerTools.isPositionInEXEC(qcp, position)) {
-                const loc = this.getSQLCursor(document, qcp, position);
-                if (loc !== undefined) {
-                    locations.push(loc);
-                }
-                return locations;
-            }
+        if (qcp && VSCOBOLSourceScannerTools.isPositionInEXEC(qcp, position)) {
+            const loc = this.getSQLCursor(document, qcp, position);
+            if (loc) return [loc];
         }
 
         return locations;
     }
 
-    private getSectionOrParaLocation(document: vscode.TextDocument, sf: ICOBOLSourceScanner, position: vscode.Position): vscode.Location | undefined {
-        const wordRange = document.getWordRangeAtPosition(position, this.sectionRegEx);
-        const word = wordRange ? document.getText(wordRange) : "";
-        if (word === "") {
-            return undefined;
-        }
-
-        const wordLower = word.toLowerCase();
-
-        try {
-
-            if (sf.sections.has(wordLower)) {
-                const token = sf.sections.get(wordLower);
-                if (token !== undefined) {
-                    const spos = new vscode.Position(token.rangeStartLine, token.rangeStartColumn);
-                    const rpos = new vscode.Position(token.rangeEndLine, token.rangeEndColumn);
-                    const trange = new vscode.Range(spos, rpos);
-                    const uri = vscode.Uri.parse(token.filenameAsURI);
-                    return new vscode.Location(uri, trange);
-                }
-            }
-
-        }
-        catch (e) {
-            VSLogger.logMessage((e as Error).message);
-        }
-
-        try {
-            if (sf.paragraphs.has(wordLower)) {
-                const token = sf.paragraphs.get(wordLower);
-                if (token !== undefined) {
-                    const spos = new vscode.Position(token.rangeStartLine, token.rangeStartColumn);
-                    const rpos = new vscode.Position(token.rangeEndLine, token.rangeEndColumn);
-                    const trange = new vscode.Range(spos, rpos);
-                    const uri = vscode.Uri.parse(token.filenameAsURI);
-                    return new vscode.Location(uri, trange);
-                }
-            }
-        }
-        catch (e) {
-            VSLogger.logMessage((e as Error).message);
-        }
-        return undefined;
+    private isValidToken(token: unknown): token is COBOLToken {
+        return (
+            typeof token === "object" &&
+            token !== null &&
+            "rangeStartLine" in (token as COBOLToken) &&
+            "rangeStartColumn" in (token as COBOLToken) &&
+            "filenameAsURI" in (token as COBOLToken)
+        );
     }
 
-
-
-    private getSQLCursor(document: vscode.TextDocument, sf: ICOBOLSourceScanner, position: vscode.Position): vscode.Location | undefined {
-        const wordRange = document.getWordRangeAtPosition(position, this.sectionRegEx);
-        const word = wordRange ? document.getText(wordRange) : "";
-        if (word === "") {
-            return undefined;
-        }
-
-        try {
-            const wordLower = word.toLowerCase();
-            if (sf.execSQLDeclare.has(wordLower)) {
-                const sd = sf.execSQLDeclare.get(wordLower);
-                if (sd !== undefined) {
-                    const token = sd.token;
-                    const spos = new vscode.Position(token.rangeStartLine, token.rangeStartColumn);
-                    const rpos = new vscode.Position(token.rangeEndLine, token.rangeEndColumn);
-                    const trange = new vscode.Range(spos, rpos);
-                    const uri = vscode.Uri.parse(token.filenameAsURI);
-                    return new vscode.Location(uri, trange);
-                }
-            }
-
-        }
-        catch (e) {
-            VSLogger.logMessage((e as Error).message);
-        }
-
-        return undefined;
+    private createLocation(token: COBOLToken): vscode.Location {
+        const start = new vscode.Position(token.rangeStartLine, token.rangeStartColumn);
+        const end = new vscode.Position(token.rangeEndLine, token.rangeEndColumn);
+        const range = new vscode.Range(start, end);
+        const uri = vscode.Uri.parse(token.filenameAsURI);
+        return new vscode.Location(uri, range);
     }
 
-    private getVariableInCurrentDocument(locations: vscode.Location[], document: vscode.TextDocument, position: vscode.Position, settings: ICOBOLSettings): boolean {
-        const wordRange = document.getWordRangeAtPosition(position, this.variableRegEx);
-        const word = wordRange ? document.getText(wordRange) : "";
-        if (word === "") {
-            return false;
+    private getWord(document: vscode.TextDocument, position: vscode.Position, regex: RegExp): string | undefined {
+        const range = document.getWordRangeAtPosition(position, regex);
+        return range ? document.getText(range) : undefined;
+    }
+
+    private getSectionOrParaLocation(
+        document: vscode.TextDocument,
+        sf: ICOBOLSourceScanner,
+        position: vscode.Position
+    ): vscode.Location | undefined {
+        const word = this.getWord(document, position, COBOLSourceDefinition.sectionRegEx)?.toLowerCase();
+        if (!word) return undefined;
+
+        try {
+            const token = sf.sections.get(word) ?? sf.paragraphs.get(word);
+            return this.isValidToken(token) ? this.createLocation(token) : undefined;
+        } catch (e) {
+            VSLogger.logMessage((e as Error).message);
+            return undefined;
         }
+    }
+
+    private getSQLCursor(
+        document: vscode.TextDocument,
+        sf: ICOBOLSourceScanner,
+        position: vscode.Position
+    ): vscode.Location | undefined {
+        const word = this.getWord(document, position, COBOLSourceDefinition.sectionRegEx)?.toLowerCase();
+        if (!word) return undefined;
+
+        try {
+            const decl = sf.execSQLDeclare.get(word);
+            return decl && this.isValidToken(decl.token) ? this.createLocation(decl.token) : undefined;
+        } catch (e) {
+            VSLogger.logMessage((e as Error).message);
+            return undefined;
+        }
+    }
+
+    private getVariableInCurrentDocument(
+        locations: vscode.Location[],
+        document: vscode.TextDocument,
+        position: vscode.Position,
+        settings: ICOBOLSettings
+    ): boolean {
+        const word = this.getWord(document, position, COBOLSourceDefinition.variableRegEx);
+        if (!word) return false;
 
         const tokenLower: string = word.toLowerCase();
-        if (getCOBOLKeywordDictionary(document.languageId).has(tokenLower)) {
-            return false;
-        }
+        if (getCOBOLKeywordDictionary(document.languageId).has(tokenLower)) return false;
 
-        const sf: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document,settings);
-        if (sf === undefined) {
-            return false;
-        }
+        const sf: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(document, settings);
+        if (!sf) return false;
 
         const variables: COBOLVariable[] | undefined = sf.constantsOrVariables.get(tokenLower);
-        if (variables === undefined || variables.length === 0) {
-            return false;
-        }
+        if (!variables?.length) return false;
 
-        for (let i = 0; i < variables.length; i++) {
-            const token: COBOLToken = variables[i].token;
-            if (token.tokenNameLower === "filler") {
-                continue;
-            }
-
-            const spos = new vscode.Position(token.rangeStartLine, token.rangeStartColumn);
-            const rpos = new vscode.Position(token.rangeEndLine, token.rangeEndColumn);
-            const trange = new vscode.Range(spos, rpos);
-            const uri = vscode.Uri.parse(token.filenameAsURI);
-            switch (token.tokenType) {
-                case COBOLTokenStyle.Union:
-                    {
-                        locations.push(new vscode.Location(uri, trange));
-                        break;
-                    }
-                case COBOLTokenStyle.Constant:
-                    {
-                        locations.push(new vscode.Location(uri, trange));
-                        break;
-                    }
-                case COBOLTokenStyle.ConditionName:
-                    {
-                        locations.push(new vscode.Location(uri, trange));
-                        break;
-                    }
-                case COBOLTokenStyle.Variable:
-                    {
-                        locations.push(new vscode.Location(uri, trange));
-                        break;
-                    }
+        for (const variable of variables) {
+            const token = variable.token;
+            if (token.tokenNameLower !== "filler" && this.isValidToken(token)) {
+                locations.push(this.createLocation(token));
             }
         }
 
-        if (locations.length === 0) {
-            return false;
-        }
-        return true;
+        return locations.length > 0;
     }
 
-    private getGenericTarget(queryRegEx: RegExp, tokenMap: Map<string, COBOLToken>, document: vscode.TextDocument, position: vscode.Position): vscode.Location | undefined {
-        const wordRange = document.getWordRangeAtPosition(position, queryRegEx);
-        const word = wordRange ? document.getText(wordRange) : "";
-        if (word === "") {
-            return undefined;
-        }
-
-        const workLower = word.toLowerCase();
-        if (tokenMap.has(workLower)) {
-            const token: COBOLToken | undefined = tokenMap.get(workLower);
-            if (token !== undefined) {
-                const spos = new vscode.Position(token.rangeStartLine, token.rangeStartColumn);
-                const rpos = new vscode.Position(token.rangeEndLine, token.rangeEndColumn);
-                const trange = new vscode.Range(spos, rpos);
-                const uri = vscode.Uri.parse(token.filenameAsURI);
-                return new vscode.Location(uri, trange);
-            }
-        }
-        return undefined;
+    private getGenericTarget(
+        regex: RegExp,
+        tokenMap: Map<string, COBOLToken>,
+        document: vscode.TextDocument,
+        position: vscode.Position
+    ): vscode.Location | undefined {
+        const word = this.getWord(document, position, regex)?.toLowerCase();
+        const token = word ? tokenMap.get(word) : undefined;
+        return this.isValidToken(token) ? this.createLocation(token) : undefined;
     }
 
-    private getClassTarget(document: vscode.TextDocument, sf: ICOBOLSourceScanner, position: vscode.Position): vscode.Location | undefined {
-        return this.getGenericTarget(this.classRegEx, sf.classes, document, position);
+    private getClassTarget(
+        document: vscode.TextDocument,
+        sf: ICOBOLSourceScanner,
+        position: vscode.Position
+    ): vscode.Location | undefined {
+        return this.getGenericTarget(COBOLSourceDefinition.classRegEx, sf.classes, document, position);
     }
 
-    private getMethodTarget(document: vscode.TextDocument, sf: ICOBOLSourceScanner, position: vscode.Position): vscode.Location | undefined {
-        return this.getGenericTarget(this.methodRegEx, sf.methods, document, position);
+    private getMethodTarget(
+        document: vscode.TextDocument,
+        sf: ICOBOLSourceScanner,
+        position: vscode.Position
+    ): vscode.Location | undefined {
+        return this.getGenericTarget(COBOLSourceDefinition.methodRegEx, sf.methods, document, position);
     }
-
 }

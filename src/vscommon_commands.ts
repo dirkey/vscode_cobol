@@ -627,7 +627,7 @@ export function activateCommonCommands(context: vscode.ExtensionContext) {
 
             const settings = VSCOBOLConfiguration.get_resource_settings(vscode.window.activeTextEditor.document, VSExternalFeatures);
             if (VSExtensionUtils.isKnownCOBOLLanguageId(settings, langid)) {
-                VSCOBOLUtils.RemoveComments(vscode.window.activeTextEditor);
+                VSCOBOLUtils.removeComments(vscode.window.activeTextEditor);
             }
         }
     }));
@@ -638,7 +638,7 @@ export function activateCommonCommands(context: vscode.ExtensionContext) {
             const settings = VSCOBOLConfiguration.get_resource_settings(vscode.window.activeTextEditor.document, VSExternalFeatures);
 
             if (VSExtensionUtils.isKnownCOBOLLanguageId(settings, langid)) {
-                VSCOBOLUtils.RemoveIdentificationArea(vscode.window.activeTextEditor);
+                VSCOBOLUtils.removeIdentificationArea(vscode.window.activeTextEditor);
             }
         }
     }));

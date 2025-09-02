@@ -4,7 +4,7 @@ import { SourceScannerUtils, COBOLTokenStyle } from "./cobolsourcescanner";
 import { cobolRegistersDictionary, cobolStorageKeywordDictionary, getCOBOLKeywordDictionary } from "./keywords/cobolKeywords";
 import { VSLogger } from "./vslogger";
 import { VSCOBOLSourceScanner } from "./vscobolscanner";
-import { InMemoryGlobalCacheHelper, InMemoryGlobalSymbolCache } from "./globalcachehelper";
+import { InMemoryGlobalSymbolCache } from "./globalcachehelper";
 import { COBOLFileUtils } from "./fileutils";
 import { VSWorkspaceFolders } from "./vscobolfolders";
 import { ICOBOLSettings, intellisenseStyle } from "./iconfiguration";
@@ -38,156 +38,97 @@ export enum AlignStyle {
 }
 
 export class VSCOBOLUtils {
+    private static getGlobPattern(config: ICOBOLSettings, extensions: string[]): string {
+        const prefix = config.maintain_metadata_recursive_search ? "**/*." : "*.";
+        const filteredExts = extensions.filter(ext => ext.length > 0).join(",");
+        return `${prefix}{${filteredExts}}`;
+    }
+
     private static getProgramGlobPattern(config: ICOBOLSettings): string {
-        let globString = config.maintain_metadata_recursive_search ? "**/*.{" : "*.{";
-
-        for (const ext of config.program_extensions) {
-            if (ext.length !== 0) {
-                if (globString.endsWith("{")) {
-                    globString += ext;
-                } else {
-                    globString += "," + ext;
-                }
-            }
-        }
-
-        globString += "}";
-
-        return globString;
+        return VSCOBOLUtils.getGlobPattern(config, config.program_extensions);
     }
 
     private static getCopyBookGlobPattern(config: ICOBOLSettings): string {
-        let globString = config.maintain_metadata_recursive_search ? "**/*.{" : "*.{";
-
-        for (const ext of config.copybookexts) {
-            if (ext.length !== 0) {
-                if (globString.endsWith("{")) {
-                    globString += ext;
-                } else {
-                    globString += "," + ext;
-                }
-            }
-        }
-
-        globString += "}";
-
-        return globString;
+        return VSCOBOLUtils.getGlobPattern(config, config.copybookexts);
     }
 
     public static getCopyBookGlobPatternForPartialName(config: ICOBOLSettings, partialFilename = "*"): string {
-        let globString = "**/" + partialFilename + "{,";
+        const extensions = config.copybookexts
+            .filter(ext => ext.length > 0)
+            .map(ext => `.${ext}`)
+            .join(",");
 
-        for (const ext of config.copybookexts) {
-            if (ext.length !== 0) {
-                if (globString.endsWith("{")) {
-                    globString += "." + ext;
-                } else {
-                    globString += ",." + ext;
-                }
-            }
-        }
-
-        globString += "}";
-
-        return globString;
+        return `**/${partialFilename}{${extensions}}`;
     }
+
     static prevWorkSpaceUri: vscode.Uri | undefined = undefined;
 
-    static populateDefaultCallableSymbolsSync(settings: ICOBOLSettings, reset: boolean): void {
-        (async () => VSCOBOLUtils.populateDefaultCallableSymbols(settings, reset))();
-    }
+    private static async populateDefaultSymbols(
+        settings: ICOBOLSettings,
+        reset: boolean,
+        cache: Map<string, string>,
+        getGlob: (config: ICOBOLSettings) => string,
+        keyTransform: (fileName: string) => string = (f) => f.toLowerCase()
+    ): Promise<void> {
+        const wsFolders = VSWorkspaceFolders.get(settings);
+        if (!wsFolders) return;
 
-    static async populateDefaultCallableSymbols(settings: ICOBOLSettings, reset: boolean): Promise<void> {
-        const ws = VSWorkspaceFolders.get(settings);
-        if (ws === undefined) {
+        const workspaceFile = vscode.workspace.workspaceFile;
+        if (!workspaceFile) {
+            cache.clear();
             return;
         }
 
-        const wsf = vscode.workspace.workspaceFile;
-        if (wsf === undefined) {
-            InMemoryGlobalSymbolCache.defaultCallableSymbols.clear();
-            return;
-        }
-
-        // reset 
+        // Reset or skip if already cached
         if (reset) {
             VSCOBOLUtils.prevWorkSpaceUri = undefined;
-        } else {
-            // already cached?
-            if (wsf.fsPath === VSCOBOLUtils.prevWorkSpaceUri?.fsPath) {
-                return;
-            }
-        }
-
-        // stash away current ws
-        VSCOBOLUtils.prevWorkSpaceUri = wsf;
-        const globPattern = VSCOBOLUtils.getProgramGlobPattern(settings);
-
-        await vscode.workspace.findFiles(globPattern).then((uris: vscode.Uri[]) => {
-            uris.forEach((uri: vscode.Uri) => {
-                const fullPath = uri.fsPath;
-                const fileName = InMemoryGlobalCacheHelper.getFilenameWithoutPath(fullPath);
-                const fileNameNoExt = path.basename(fileName, path.extname(fileName));
-                const callableSymbolFromFilenameLower = fileNameNoExt.toLowerCase();
-                const c = InMemoryGlobalSymbolCache.defaultCallableSymbols.get(callableSymbolFromFilenameLower);
-                if (c === undefined) {
-                    InMemoryGlobalSymbolCache.defaultCallableSymbols.set(callableSymbolFromFilenameLower, fullPath);
-                }
-            });
-        });
-    }
-
-    static populateDefaultCopyBooksSync(settings: ICOBOLSettings, reset: boolean): void {
-        (async () => VSCOBOLUtils.populateDefaultCopyBooks(settings, reset))();
-    }
-
-    static async populateDefaultCopyBooks(settings: ICOBOLSettings, reset: boolean): Promise<void> {
-        const ws = VSWorkspaceFolders.get(settings);
-        if (ws === undefined) {
+        } else if (workspaceFile.fsPath === VSCOBOLUtils.prevWorkSpaceUri?.fsPath) {
             return;
         }
 
-        const wsf = vscode.workspace.workspaceFile;
-        if (wsf === undefined) {
-            InMemoryGlobalSymbolCache.defaultCopybooks.clear();
-            return;
-        }
+        VSCOBOLUtils.prevWorkSpaceUri = workspaceFile;
 
-        // reset 
-        if (reset) {
-            VSCOBOLUtils.prevWorkSpaceUri = undefined;
-        } else {
-            // already cached?
-            if (wsf.fsPath === VSCOBOLUtils.prevWorkSpaceUri?.fsPath) {
-                return;
+        const globPattern = getGlob(settings);
+        const uris = await vscode.workspace.findFiles(globPattern);
+
+        for (const uri of uris) {
+            const fullPath = uri.fsPath;
+            const fileName = path.basename(fullPath, path.extname(fullPath));
+            const key = keyTransform(fileName);
+
+            if (!cache.has(key)) {
+                cache.set(key, fullPath);
             }
         }
-
-        // stash away current ws
-        VSCOBOLUtils.prevWorkSpaceUri = wsf;
-        const globPattern = VSCOBOLUtils.getCopyBookGlobPattern(settings);
-
-        await vscode.workspace.findFiles(globPattern).then((uris: vscode.Uri[]) => {
-            uris.forEach((uri: vscode.Uri) => {
-                const fullPath = uri.fsPath;
-                const fileName = InMemoryGlobalCacheHelper.getFilenameWithoutPath(fullPath);
-                const fileNameNoExt = path.basename(fileName, path.extname(fileName));
-                const c = InMemoryGlobalSymbolCache.defaultCopybooks.get(fileNameNoExt);
-                if (c === undefined) {
-                    InMemoryGlobalSymbolCache.defaultCopybooks.set(fileNameNoExt, fullPath);
-                }
-            });
-        });
     }
 
+    // Usage for callable symbols
+    static populateDefaultCallableSymbols(settings: ICOBOLSettings, reset: boolean) {
+        void VSCOBOLUtils.populateDefaultSymbols(
+            settings,
+            reset,
+            InMemoryGlobalSymbolCache.defaultCallableSymbols,
+            VSCOBOLUtils.getProgramGlobPattern,
+            (f) => f.toLowerCase()
+        );
+    }
+
+    // Usage for copybooks
+    static populateDefaultCopyBooks(settings: ICOBOLSettings, reset: boolean) {
+        void VSCOBOLUtils.populateDefaultSymbols(
+            settings,
+            reset,
+            InMemoryGlobalSymbolCache.defaultCopybooks,
+            VSCOBOLUtils.getCopyBookGlobPattern
+        );
+    }
 
     private static typeToArray(types: string[], prefix: string, typeMap: Map<string, COBOLFileSymbol[]>) {
-        for (const [i] of typeMap.entries()) {
-            const fileSymbol = typeMap.get(i);
-            if (fileSymbol !== undefined) {
-                fileSymbol.forEach(function (value: COBOLFileSymbol) {
-                    types.push(`${prefix},${i},${value.filename},${value.linenum}`);
-                });
+        for (const [typeKey, symbols] of typeMap.entries()) {
+            if (!symbols) continue;
+
+            for (const symbol of symbols) {
+                types.push(`${prefix},${typeKey},${symbol.filename},${symbol.linenum}`);
             }
         }
     }
@@ -208,97 +149,56 @@ export class VSCOBOLUtils {
     }
 
     public static saveGlobalCacheToWorkspace(settings: ICOBOLSettings, update = true): void {
-        // only update if we have a workspace
-        if (VSWorkspaceFolders.get(settings) === undefined) {
+        // Only proceed if workspace exists and caching is enabled
+        if (!VSWorkspaceFolders.get(settings) || vscode.workspace.workspaceFile === undefined || !settings.maintain_metadata_cache) {
             return;
         }
 
-        // unless we say we want single folder support, never apply an update to it
-        if (vscode.workspace.workspaceFile === undefined) {
-            return;
-        }
+        if (!InMemoryGlobalSymbolCache.isDirty) return;
 
-        // only update when we are caching
-        if (settings.maintain_metadata_cache === false) {
-            return;
-        }
+        try {
+            // Callable symbols excluding default callables
+            const symbols = Array.from(InMemoryGlobalSymbolCache.callableSymbols.entries())
+                .flatMap(([symbolName, fileSymbols]) =>
+                    !symbolName || !fileSymbols ? [] :
+                    fileSymbols
+                        .filter(() => !InMemoryGlobalSymbolCache.defaultCallableSymbols.has(symbolName))
+                        .map(s => s.linenum !== 0 ? `${symbolName},${s.filename},${s.linenum}` : `${symbolName},${s.filename}`)
+                );
 
-        if (InMemoryGlobalSymbolCache.isDirty) {
-            const symbols: string[] = settings.metadata_symbols;
-            const entrypoints: string[] = settings.metadata_entrypoints;
-            const types: string[] = settings.metadata_types;
-            const files: string[] = settings.metadata_files;
-            const knownCopybooks: string[] = settings.metadata_knowncopybooks;
-            symbols.length = 0;
-            entrypoints.length = 0;
-            types.length = 0;
-            files.length = 0;
-            knownCopybooks.length = 0;
+            // Entry points
+            const entrypoints = Array.from(InMemoryGlobalSymbolCache.entryPoints.entries())
+                .flatMap(([entryName, fileSymbols]) =>
+                    !entryName || !fileSymbols ? [] :
+                    fileSymbols.map(s => `${entryName},${s.filename},${s.linenum}`)
+                );
 
-            for (const [i] of InMemoryGlobalSymbolCache.callableSymbols.entries()) {
-                if (i !== null && i.length !== 0) {
-                    const fileSymbol = InMemoryGlobalSymbolCache.callableSymbols.get(i);
-                    if (fileSymbol !== undefined) {
-                        fileSymbol.forEach(function (value: COBOLFileSymbol) {
-                            update = true;
+            // Known copybooks
+            const knownCopybooks = Array.from(InMemoryGlobalSymbolCache.knownCopybooks.keys());
 
-                            // do not save a callable that is in the defaultCallableSymbol map
-                            if (InMemoryGlobalSymbolCache.defaultCallableSymbols.has(i) === false) {
-                                if (value.linenum !== 0) {
-                                    symbols.push(`${i},${value.filename},${value.linenum}`);
-                                } else {
-                                    symbols.push(`${i},${value.filename}`);
-                                }
-                            }
-                        });
-                    }
-                }
-                else {
-                    update = true;
-                }
-            }
-
-            for (const [i] of InMemoryGlobalSymbolCache.entryPoints.entries()) {
-                if (i !== null && i.length !== 0) {
-                    const fileSymbol = InMemoryGlobalSymbolCache.entryPoints.get(i);
-                    if (fileSymbol !== undefined) {
-                        fileSymbol.forEach(function (value: COBOLFileSymbol) {
-                            entrypoints.push(`${i},${value.filename},${value.linenum}`);
-                        });
-                    }
-                }
-            }
-
-            for (const [encodedKey,] of InMemoryGlobalSymbolCache.knownCopybooks.entries()) {
-                knownCopybooks.push(encodedKey);
-            }
-
+            // Types, interfaces, enums
+            const types: string[] = [];
             VSCOBOLUtils.typeToArray(types, "T", InMemoryGlobalSymbolCache.types);
             VSCOBOLUtils.typeToArray(types, "I", InMemoryGlobalSymbolCache.interfaces);
             VSCOBOLUtils.typeToArray(types, "E", InMemoryGlobalSymbolCache.enums);
 
-            for (const [fileName] of InMemoryGlobalSymbolCache.sourceFilenameModified.entries()) {
-                if (fileName !== null && fileName.length !== 0) {
-                    const cws = InMemoryGlobalSymbolCache.sourceFilenameModified.get(fileName);
-                    if (cws !== undefined) {
-                        files.push(`${cws.lastModifiedTime},${cws.workspaceFilename}`);
-                    }
-                }
-            }
+            // Modified source files
+            const files = Array.from(InMemoryGlobalSymbolCache.sourceFilenameModified.values())
+                .map(cws => `${cws.lastModifiedTime},${cws.workspaceFilename}`);
 
+            // Update workspace configuration if requested
             if (update) {
-                try {
-                    const editorConfig = VSCOBOLEditorConfiguration.getEditorConfig();
-                    editorConfig.update("metadata_symbols", symbols, false);
-                    editorConfig.update("metadata_entrypoints", entrypoints, false);
-                    editorConfig.update("metadata_types", types, false);
-                    editorConfig.update("metadata_files", files, false);
-                    editorConfig.update("metadata_knowncopybooks", knownCopybooks, false);
-                    InMemoryGlobalSymbolCache.isDirty = false;
-                } catch (e) {
-                    VSLogger.logException("Failed to update metadata", e as Error);
-                }
+                const editorConfig = VSCOBOLEditorConfiguration.getEditorConfig();
+                editorConfig.update("metadata_symbols", symbols, false);
+                editorConfig.update("metadata_entrypoints", entrypoints, false);
+                editorConfig.update("metadata_types", types, false);
+                editorConfig.update("metadata_files", files, false);
+                editorConfig.update("metadata_knowncopybooks", knownCopybooks, false);
+
+                InMemoryGlobalSymbolCache.isDirty = false;
             }
+        } catch (e) {
+            VSLogger.logException("Failed to update metadata", e as Error);
         }
     }
 
@@ -312,149 +212,140 @@ export class VSCOBOLUtils {
         return false;
     }
 
-    public static indentToCursor(): void {
-        if (vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
-            const sel = editor.selection;
-            const line = editor.document.lineAt(sel.start.line).text;
-            const lineTrimmed = line.trimStart();
+    private static adjustLineInternal(toCursor: boolean): void {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return;
 
-            editor.edit(edit => {
-                const posStartOfLine = new vscode.Position(sel.start.line, 0);
-                const endOfLine = new vscode.Position(sel.start.line, line.length);
-                const ran = new vscode.Range(posStartOfLine, endOfLine);
-                edit.delete(ran);
-                // }).then(ok => {
-                //     editor.edit(edit => {
-                // const posStartOfLine = new vscode.Position(sel.start.line,0);
-                const replaceLine = " ".repeat(sel.start.character) + lineTrimmed;
-                edit.insert(posStartOfLine, replaceLine);
-                // })
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            }).then(ok => {
-                editor.selection = sel;
-            });
-        }
+        const sel = editor.selection;
+        const lineText = editor.document.lineAt(sel.start.line).text;
+        const trimmedLine = lineText.trimStart();
+
+        const startOfLine = new vscode.Position(sel.start.line, 0);
+        const endOfLine = new vscode.Position(sel.start.line, lineText.length);
+        const range = new vscode.Range(startOfLine, endOfLine);
+
+        const newLine = toCursor
+            ? " ".repeat(sel.start.character) + trimmedLine
+            : trimmedLine;
+
+        editor.edit(editBuilder => {
+            editBuilder.replace(range, newLine);
+        }).then(() => {
+            editor.selection = toCursor
+                ? sel // restore cursor for indentToCursor
+                : new vscode.Selection(startOfLine, startOfLine); // move to start for leftAdjustLine
+        });
+    }
+
+    public static indentToCursor(): void {
+        VSCOBOLUtils.adjustLineInternal(true);
     }
 
     public static leftAdjustLine(): void {
-        if (vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
-            const sel = editor.selection;
-            const line = editor.document.lineAt(sel.start.line).text;
-            const lineTrimmed = line.trimStart();
-            const posStartOfLine = new vscode.Position(sel.start.line, 0);
-
-            editor.edit(edit => {
-                const endOfLine = new vscode.Position(sel.start.line, line.length);
-                const ran = new vscode.Range(posStartOfLine, endOfLine);
-                edit.delete(ran);
-                edit.insert(posStartOfLine, lineTrimmed);
-                // })
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            }).then(ok => {
-                editor.selection = new vscode.Selection(posStartOfLine, posStartOfLine);
-            });
-        }
+        VSCOBOLUtils.adjustLineInternal(false);
     }
 
-    public static transposeSelection(editor: vscode.TextEditor, textEditor: vscode.TextEditorEdit): void {
+    public static transposeSelection(editor: vscode.TextEditor, editBuilder: vscode.TextEditorEdit): void {
         for (const selection of editor.selections) {
-            if (selection.anchor.isEqual(selection.active)) {
-                const position = new vscode.Position(selection.active.line, selection.active.character);
-                const lastPositionInLine = editor.document.lineAt(position.line).range.end;
-                if (!(position.isEqual(lastPositionInLine) || position.character === 0)) {
-                    const nextSelection = new vscode.Selection(position, new vscode.Position(position.line, position.character + 1));
-                    const nextChar = editor.document.getText(nextSelection);
-                    textEditor.delete(nextSelection);
-                    const prevPosition = new vscode.Position(position.line, position.character - 1);
-                    textEditor.insert(prevPosition, nextChar);
+            // Handle single-character cursor (no selection)
+            if (selection.isEmpty) {
+                const pos = selection.active;
+                const lineEnd = editor.document.lineAt(pos.line).range.end;
+
+                // Skip if at the start or end of the line
+                if (pos.character > 0 && pos.isBefore(lineEnd)) {
+                    const nextCharRange = new vscode.Range(pos, pos.translate(0, 1));
+                    const nextChar = editor.document.getText(nextCharRange);
+
+                    editBuilder.delete(nextCharRange);
+                    const prevPos = pos.translate(0, -1);
+                    editBuilder.insert(prevPos, nextChar);
                 }
             } else {
-                const startPosition = new vscode.Position(selection.anchor.line, selection.anchor.character);
-                const endPosition = new vscode.Position(selection.active.line, selection.active.character);
-                const nextSelection = new vscode.Selection(startPosition, new vscode.Position(startPosition.line, startPosition.character + 1));
-                const nextChar = editor.document.getText(nextSelection);
-                textEditor.delete(nextSelection);
-                const prevPosition = new vscode.Position(endPosition.line, endPosition.character);
-                textEditor.insert(prevPosition, nextChar);
+                // Handle a selection (non-empty)
+                const start = selection.start;
+                const end = selection.end;
+
+                const firstCharRange = new vscode.Range(start, start.translate(0, 1));
+                const firstChar = editor.document.getText(firstCharRange);
+
+                editBuilder.delete(firstCharRange);
+                editBuilder.insert(end, firstChar);
             }
         }
     }
 
-    public static extractSelectionTo(activeTextEditor: vscode.TextEditor, para: boolean): void {
-        const sel = activeTextEditor.selection;
-
-        const ran = new vscode.Range(sel.start, sel.end);
-        const text = activeTextEditor.document.getText(ran);
-
-
-        // TODO - Should put something in place to search forward of current line
-        //        to find the best position..
+    public static extractSelectionTo(editor: vscode.TextEditor, isParagraph: boolean): void {
+        const selection = editor.selection;
+        const selectedRange = new vscode.Range(selection.start, selection.end);
+        const selectedText = editor.document.getText(selectedRange);
 
         vscode.window.showInputBox({
-            prompt: para ? "New paragraph name?" : "New section name?",
-            validateInput: (text: string): string | undefined => {
-                if (!text || text.indexOf(" ") !== -1) {
-                    return "Invalid paragraph or section";
-                } else {
-                    return undefined;
+            prompt: isParagraph ? "New paragraph name?" : "New section name?",
+            validateInput: (input: string): string | undefined => {
+                if (!input || input.includes(" ")) {
+                    return "Invalid paragraph or section name.";
                 }
+                return undefined;
             }
-        }).then(value => {
-            // leave early
-            if (value === undefined) {
-                return;
-            }
+        }).then(name => {
+            if (!name) return; // user canceled or invalid
 
-            activeTextEditor.edit(edit => {
-                edit.replace(ran, "           perform "
-                    + value + "\n\n       "
-                    + value
-                    + (para ? ".\n" : " section.\n")
-                    + text
-                    + "\n           .\n");
+            editor.edit(editBuilder => {
+                // Determine the minimum indentation in the selected text
+                const lines = selectedText.split(/\r?\n/);
+                const minIndent = lines
+                    .filter(line => line.trim().length > 0)
+                    .reduce((min, line) => Math.min(min, line.match(/^ */)![0].length), Infinity);
+
+                // Re-indent the selected text under the new paragraph/section
+                const adjustedText = lines.map(line => {
+                    if (line.trim().length === 0) return line; // keep empty lines
+                    return "           " + line.slice(minIndent); // 11 spaces for COBOL block
+                }).join("\n");
+
+                const replacementText =
+    `       PERFORM ${name}
+
+        ${name}${isParagraph ? '.' : ' SECTION.'}
+    ${adjustedText}
+        .`;
+
+                editBuilder.replace(selectedRange, replacementText);
             });
         });
-
     }
 
     private static pad(num: number, size: number): string {
-        let s = num + "";
-        while (s.length < size) {
-            s = "0" + s;
-        }
-        return s;
+        return num.toString().padStart(size, "0");
     }
 
     public static getMFUnitAnsiColorConfig(): boolean {
         const editorConfig = VSCOBOLEditorConfiguration.getEditorConfig();
-        let expEnabled = editorConfig.get<boolean>("mfunit.diagnostic.color");
-        if (expEnabled === undefined || expEnabled === null) {
-            expEnabled = false;
-        }
-        return expEnabled;
+        return editorConfig.get<boolean>("mfunit.diagnostic.color") ?? false;
     }
 
-    public static resequenceColumnNumbers(activeEditor: vscode.TextEditor | undefined, startValue: number, increment: number): void {
-        if (activeEditor === undefined) {
+    public static resequenceColumnNumbers(
+        activeEditor: vscode.TextEditor | undefined, 
+        startValue: number, 
+        increment: number
+    ): void {
+        if (!activeEditor) {
             return;
         }
 
         const edits = new vscode.WorkspaceEdit();
         const uri = activeEditor.document.uri;
 
-        // traverse all the lines
-        for (let l = 0; l < activeEditor.document.lineCount; l++) {
-            const lineAt = activeEditor.document.lineAt(l);
-            const text = lineAt.text;
-
-            if (text.length > 6) {
-                const startPos = new vscode.Position(l, 0);
-                const endPos = new vscode.Position(l, 6);
-                const range = new vscode.Range(startPos, endPos);
-                const padString = VSCOBOLUtils.pad(startValue + (l * increment), 6);
-                edits.replace(uri, range, padString);
+        for (let lineNumber = 0; lineNumber < activeEditor.document.lineCount; lineNumber++) {
+            const line = activeEditor.document.lineAt(lineNumber);
+            if (line.text.length > 6) {
+                const range = new vscode.Range(
+                    new vscode.Position(lineNumber, 0),
+                    new vscode.Position(lineNumber, 6)
+                );
+                const paddedValue = VSCOBOLUtils.pad(startValue + lineNumber * increment, 6);
+                edits.replace(uri, range, paddedValue);
             }
         }
 
@@ -462,99 +353,90 @@ export class VSCOBOLUtils {
     }
 
     public static removeColumnNumbers(activeEditor: vscode.TextEditor): void {
-        const edits = new vscode.WorkspaceEdit();
         const uri = activeEditor.document.uri;
+        const edits: vscode.TextEdit[] = [];
 
-        // traverse all the lines
-        for (let l = 0; l < activeEditor.document.lineCount; l++) {
-            const lineAt = activeEditor.document.lineAt(l);
-            const text = lineAt.text;
-
-            if (text.length > 6) {
-                const startPos = new vscode.Position(l, 0);
-                const endPos = new vscode.Position(l, 6);
-                const range = new vscode.Range(startPos, endPos);
-                edits.replace(uri, range, "      ");
+        for (let lineNumber = 0; lineNumber < activeEditor.document.lineCount; lineNumber++) {
+            const line = activeEditor.document.lineAt(lineNumber);
+            if (line.text.length > 6) {
+                const range = new vscode.Range(
+                    new vscode.Position(lineNumber, 0),
+                    new vscode.Position(lineNumber, 6)
+                );
+                edits.push(vscode.TextEdit.replace(range, "      "));
             }
         }
-        vscode.workspace.applyEdit(edits);
+
+        if (edits.length > 0) {
+            const workspaceEdit = new vscode.WorkspaceEdit();
+            workspaceEdit.set(uri, edits);
+            vscode.workspace.applyEdit(workspaceEdit);
+        }
     }
 
-    public static RemoveIdentificationArea(activeEditor: vscode.TextEditor): void {
-        const edits = new vscode.WorkspaceEdit();
+    public static removeIdentificationArea(activeEditor: vscode.TextEditor): void {
         const uri = activeEditor.document.uri;
+        const edits: vscode.TextEdit[] = [];
 
-        // traverse all the lines
-        for (let l = 0; l < activeEditor.document.lineCount; l++) {
-            const lineAt = activeEditor.document.lineAt(l);
-            const text = lineAt.text;
-
-            if (text.length > 73) {
-                const startPos = new vscode.Position(l, 72);
-                const endPos = new vscode.Position(l, text.length);
-                const range = new vscode.Range(startPos, endPos);
-                edits.delete(uri, range);
+        for (let lineNumber = 0; lineNumber < activeEditor.document.lineCount; lineNumber++) {
+            const line = activeEditor.document.lineAt(lineNumber);
+            if (line.text.length > 73) {
+                const range = new vscode.Range(
+                    new vscode.Position(lineNumber, 72),
+                    new vscode.Position(lineNumber, line.text.length)
+                );
+                edits.push(vscode.TextEdit.delete(range));
             }
         }
-        vscode.workspace.applyEdit(edits);
+
+        if (edits.length > 0) {
+            const workspaceEdit = new vscode.WorkspaceEdit();
+            workspaceEdit.set(uri, edits);
+            vscode.workspace.applyEdit(workspaceEdit);
+        }
     }
 
-    public static RemoveComments(activeEditor: vscode.TextEditor): void {
+    public static removeComments(activeEditor: vscode.TextEditor): void {
         const uri = activeEditor.document.uri;
-        const edits = new vscode.WorkspaceEdit();
-        const delimiters: string[] = [];
-        const removeRanges: boolean[] = [];
+        const edits: vscode.TextEdit[] = [];
 
-        delimiters.push("\\*>");
-        removeRanges.push(true);
-        delimiters.push("^......\\*");
-        removeRanges.push(false);
+        // Comment patterns: [regex, removeToLineEnd]
+        const commentPatterns: [RegExp, boolean][] = [
+            [/\*>/i, true],       // inline comments starting with *>
+            [/^.{6}\*/i, false]   // comments in column 7
+        ];
 
-        // traverse all the lines
-        for (let l = 0; l < activeEditor.document.lineCount; l++) {
-            const line = activeEditor.document.lineAt(l);
-            let matched = false;
-            for (let i = 0; i < delimiters.length; i++) {
-                if (!matched) {
-                    const expression = delimiters[i].replace(/\//ig, "\\/");
-                    const removeRange = removeRanges[i];
-                    const regEx = new RegExp(expression, "ig");
-                    const match = regEx.exec(line.text);
-                    if (match) {
-                        if (removeRange) {
-                            const startPos = new vscode.Position(l, match.index);
-                            const endPos = new vscode.Position(l, line.text.length);
-                            const range = new vscode.Range(startPos, endPos);
-                            edits.delete(uri, range);
-                            activeEditor.document.getText(range);
-                        } else {
-                            const startPos = new vscode.Position(l, match.index);
-                            const endPos = new vscode.Position(l + 1, 0);
-                            const range = new vscode.Range(startPos, endPos);
-                            edits.delete(uri, range);
-                        }
+        for (let lineNumber = 0; lineNumber < activeEditor.document.lineCount; lineNumber++) {
+            const line = activeEditor.document.lineAt(lineNumber).text;
 
-                        matched = true;
-                    }
+            for (const [regex, removeToLineEnd] of commentPatterns) {
+                const match = regex.exec(line);
+                if (match) {
+                    const startPos = new vscode.Position(lineNumber, match.index);
+                    const endPos = removeToLineEnd
+                        ? new vscode.Position(lineNumber, line.length)
+                        : new vscode.Position(lineNumber + 1, 0);
+
+                    edits.push(vscode.TextEdit.delete(new vscode.Range(startPos, endPos)));
+                    break; // stop after the first matching pattern per line
                 }
             }
         }
 
-        vscode.workspace.applyEdit(edits);
+        if (edits.length > 0) {
+            const workspaceEdit = new vscode.WorkspaceEdit();
+            workspaceEdit.set(uri, edits);
+            vscode.workspace.applyEdit(workspaceEdit);
+        }
     }
 
     private static isValidKeywordOrStorageKeyword(languageId: string, keyword: string): boolean {
         const keywordLower = keyword.toLowerCase();
-        const isKeyword = getCOBOLKeywordDictionary(languageId).has(keywordLower);
-        if (isKeyword) {
-            return true;
-        }
+        const keywordDict = getCOBOLKeywordDictionary(languageId);
 
-        if (cobolStorageKeywordDictionary.has(keywordLower)) {
-            return true;
-        }
-
-        return cobolRegistersDictionary.has(keywordLower);
+        return keywordDict.has(keywordLower) 
+            || cobolStorageKeywordDictionary.has(keywordLower) 
+            || cobolRegistersDictionary.has(keywordLower);
     }
 
     public static foldTokenLine(text: string, current: ICOBOLSourceScanner | undefined, action: FoldAction, foldConstantsToUpper: boolean, languageid: string, settings: ICOBOLSettings, defaultFoldStyle: intellisenseStyle): string {
@@ -756,430 +638,434 @@ export class VSCOBOLUtils {
         return -1;
     }
 
-    private static getAlignItemFromSelections(editor: vscode.TextEditor, sels: readonly vscode.Selection[], style: AlignStyle): number {
-        let siposa_first = -1;
-        let siposa_left = -1;
-        let siposa_right = -1;
+    private static getAlignItemFromSelections(
+        editor: vscode.TextEditor,
+        selections: readonly vscode.Selection[],
+        style: AlignStyle
+    ): number {
+        let firstPos = -1;
+        let leftPos = -1;
+        let rightPos = -1;
 
-        for (const sel of sels) {
-            for (let startLine = sel.start.line; startLine <= sel.end.line; startLine++) {
-                const textSelection = editor.document.lineAt(startLine).text;
-                const line = textSelection.trimEnd();
-                const sipos = this.getStorageItemPosition(line);
+        for (const sel of selections) {
+            for (let lineNum = sel.start.line; lineNum <= sel.end.line; lineNum++) {
+                const lineText = editor.document.lineAt(lineNum).text.trimEnd();
+                const pos = this.getStorageItemPosition(lineText);
 
-                if (siposa_first === -1) {
-                    siposa_first = sipos;
-                }
-
-                if (siposa_left === -1) {
-                    siposa_left = sipos;
-                }
-
-                if (sipos > siposa_right) {
-                    siposa_right = sipos;
-                }
-
-                if (sipos < siposa_left) {
-                    siposa_left = sipos;
-                }
+                if (firstPos === -1) firstPos = pos;
+                if (leftPos === -1 || pos < leftPos) leftPos = pos;
+                if (pos > rightPos) rightPos = pos;
             }
         }
 
         switch (style) {
-            case AlignStyle.First: return siposa_first;
-            case AlignStyle.Left: return siposa_left;
-            case AlignStyle.Right: return siposa_right;
-            case AlignStyle.Center: return Math.trunc((siposa_left + siposa_right) / 2);
+            case AlignStyle.First: return firstPos;
+            case AlignStyle.Left: return leftPos;
+            case AlignStyle.Right: return rightPos;
+            case AlignStyle.Center: return Math.trunc((leftPos + rightPos) / 2);
         }
+
+        return -1; // fallback if style is undefined
     }
 
     public static alignStorage(style: AlignStyle): void {
         const editor = vscode.window.activeTextEditor;
-        if (editor) {
-            const sels = editor.selections;
-            editor.edit(edits => {
-                const siposa_from_selection = VSCOBOLUtils.getAlignItemFromSelections(editor, sels, style);
+        if (!editor) return;
 
-                if (siposa_from_selection !== -1) {
-                    for (const sel of sels) {
-                        for (let startLine = sel.start.line; startLine <= sel.end.line; startLine++) {
-                            const textSelection = editor.document.lineAt(startLine).text;
-                            const ran = new vscode.Range(new vscode.Position(startLine, 0),
-                                new vscode.Position(startLine, textSelection.length));
-                            const line = textSelection.trimEnd();
-                            const sipos = this.getStorageItemPosition(line);
-                            if (sipos !== -1) {
-                                if (sipos !== siposa_from_selection) {
-                                    const line_left = line.substring(0, sipos).trimEnd().padEnd(siposa_from_selection - 1) + " ";
-                                    const line_right = line.substring(sipos).trimStart();
-                                    const newtext = line_left + line_right;
-                                    edits.replace(ran, newtext);
-                                }
-                            }
-                        }
+        const selections = editor.selections;
+        const targetPos = VSCOBOLUtils.getAlignItemFromSelections(editor, selections, style);
+        if (targetPos === -1) return;
+
+        editor.edit(edits => {
+            for (const sel of selections) {
+                for (let lineNum = sel.start.line; lineNum <= sel.end.line; lineNum++) {
+                    const lineText = editor.document.lineAt(lineNum).text;
+                    const currentPos = this.getStorageItemPosition(lineText);
+                    if (currentPos === -1 || currentPos === targetPos) continue;
+
+                    // Align the storage area without creating multiple substrings
+                    const leftLength = targetPos - 1;
+                    let leftPart = lineText.slice(0, currentPos).trimEnd();
+                    if (leftPart.length < leftLength) {
+                        leftPart = leftPart.padEnd(leftLength, " ");
                     }
+
+                    const rightPart = lineText.slice(currentPos).trimStart();
+                    const newText = `${leftPart} ${rightPart}`;
+
+                    edits.replace(
+                        new vscode.Range(
+                            new vscode.Position(lineNum, 0),
+                            new vscode.Position(lineNum, lineText.length)
+                        ),
+                        newText
+                    );
                 }
-            });
-        }
-    }
-
-    public static async changeDocumentId(fromID: string, toID: string) {
-        for (const vte of vscode.window.visibleTextEditors) {
-            if (vte.document.languageId == fromID) {
-                await vscode.languages.setTextDocumentLanguage(vte.document, toID);
             }
+        });
+    }
+
+    public static async changeDocumentId(fromID: string, toID: string): Promise<void> {
+        const editors = vscode.window.visibleTextEditors.filter(editor => editor.document.languageId === fromID);
+        for (const editor of editors) {
+            await vscode.languages.setTextDocumentLanguage(editor.document, toID);
         }
     }
 
-    public static enforceFileExtensions(settings: ICOBOLSettings, activeEditor: vscode.TextEditor, externalFeatures: IExternalFeatures, verbose: boolean, requiredLanguage: string) {
-        // const fileConfig = vscode.workspace
+    public static enforceFileExtensions(
+        settings: ICOBOLSettings,
+        activeEditor: vscode.TextEditor,
+        externalFeatures: IExternalFeatures,
+        verbose: boolean,
+        requiredLanguage: string
+    ): void {
         const filesConfig = vscode.workspace.getConfiguration("files");
 
-        if (requiredLanguage == ExtensionDefaults.microFocusCOBOLLanguageId) {
-            setMicroFocusSuppressFileAssociationsPrompt(settings, true);
-        } else {
-            setMicroFocusSuppressFileAssociationsPrompt(settings, false);
-        }
+        // Handle Micro Focus suppression prompt
+        setMicroFocusSuppressFileAssociationsPrompt(
+            settings,
+            requiredLanguage === ExtensionDefaults.microFocusCOBOLLanguageId
+        );
 
-        const filesAssociationsConfig = filesConfig.get<{ [name: string]: string }>("associations") ?? {} as { [key: string]: string }
+        // Get current file associations
+        const filesAssociationsConfig = filesConfig.get<{ [key: string]: string }>("associations") ?? {};
         let updateRequired = false;
 
         const fileAssocMap = new Map<string, string>();
-        let fileAssocCount = 0;
-        for (const assoc in filesAssociationsConfig) {
-            const assocTo = filesAssociationsConfig[assoc];
-            if (verbose && fileAssocCount === 0) {
-                externalFeatures.logMessage("Active File associations");
+        let logHeaderPrinted = false;
+
+        for (const [assoc, assocTo] of Object.entries(filesAssociationsConfig)) {
+            fileAssocMap.set(assoc, assocTo);
+
+            // Adjust Micro Focus associations if needed
+            if (
+                requiredLanguage !== ExtensionDefaults.microFocusCOBOLLanguageId &&
+                assocTo === ExtensionDefaults.microFocusCOBOLLanguageId
+            ) {
+                filesAssociationsConfig[assoc] = requiredLanguage;
+                updateRequired = true;
+            }
+
+            // Log associations once if verbose
+            if (verbose && !logHeaderPrinted) {
+                externalFeatures.logMessage("Active file associations:");
+                logHeaderPrinted = true;
             }
             if (verbose) {
-                externalFeatures.logMessage(` ${assoc} = ${assocTo}`)
+                externalFeatures.logMessage(` ${assoc} = ${assocTo}`);
             }
-
-            if (requiredLanguage !== ExtensionDefaults.microFocusCOBOLLanguageId) {
-                // grab back 
-                if (assocTo === ExtensionDefaults.microFocusCOBOLLanguageId) {
-                    filesAssociationsConfig[assoc] = requiredLanguage;
-                    updateRequired = true;
-                }
-            }
-
-            fileAssocMap.set(assoc, assocTo);
-            fileAssocCount++;
         }
 
-
+        // Enforce required language for program extensions
         for (const ext of settings.program_extensions) {
             const key = `*.${ext}`;
             const assocTo = fileAssocMap.get(key);
-            if (assocTo !== undefined) {
-                if (assocTo !== requiredLanguage) {
-                    // steal back
-                    if (verbose) {
-                        if (!VSExtensionUtils.isKnownCOBOLLanguageId(settings, assocTo)) {
-                            externalFeatures.logMessage(` WARNING: ${ext} is associated with ${assocTo}`);
-                        }
-                    }
-                    filesAssociationsConfig[key] = requiredLanguage;
-                    updateRequired = true;
+
+            if (assocTo && assocTo !== requiredLanguage) {
+                if (verbose && !VSExtensionUtils.isKnownCOBOLLanguageId(settings, assocTo)) {
+                    externalFeatures.logMessage(` WARNING: ${ext} is associated with ${assocTo}`);
                 }
-            } else {
-                filesAssociationsConfig[key] = requiredLanguage
+                filesAssociationsConfig[key] = requiredLanguage;
+                updateRequired = true;
+            } else if (!assocTo) {
+                filesAssociationsConfig[key] = requiredLanguage;
                 updateRequired = true;
             }
         }
 
+        // Update workspace or global configuration if needed
         if (updateRequired) {
-            if (VSWorkspaceFolders.get(settings) === undefined) {
-                filesConfig.update("associations", filesAssociationsConfig, vscode.ConfigurationTarget.Global);
-            } else {
-                filesConfig.update("associations", filesAssociationsConfig, vscode.ConfigurationTarget.Workspace);
-            }
+            const target = VSWorkspaceFolders.get(settings)
+                ? vscode.ConfigurationTarget.Workspace
+                : vscode.ConfigurationTarget.Global;
+            filesConfig.update("associations", filesAssociationsConfig, target);
         }
     }
 
-    public static padTo72() {
-        if (vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
-            const sel = editor.selection;
-            const line = editor.document.lineAt(sel.start.line).text;
+    public static padTo72(): void {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return;
 
-            editor.edit(edit => {
-                const posStartOfLine = new vscode.Position(sel.start.line, 0);
-                const endOfLine = new vscode.Position(sel.start.line, line.length);
-                const ran = new vscode.Range(posStartOfLine, endOfLine);
-                edit.delete(ran);
+        const lineNumber = editor.selection.start.line;
+        const lineText = editor.document.lineAt(lineNumber).text;
 
-                const extraSpaces = line.length < 72 ? 72 - line.length : 0;
-                const replaceLine = line + " ".repeat(extraSpaces);
-                edit.insert(posStartOfLine, replaceLine);
-            });
-        }
+        editor.edit(editBuilder => {
+            const lineRange = new vscode.Range(
+                new vscode.Position(lineNumber, 0),
+                new vscode.Position(lineNumber, lineText.length)
+            );
 
+            const paddedLine = lineText.padEnd(72, " ");
+            editBuilder.replace(lineRange, paddedLine);
+        });
+    }
+
+    private static replaceSelectionWith(editor: vscode.TextEditor, transform: (text: string) => string) {
+        const selection = editor.selection;
+        const text = editor.document.getText(selection);
+        const transformed = transform(text);
+
+        editor.edit(editBuilder => {
+            editBuilder.replace(selection, transformed);
+        });
     }
 
     public static selectionToHEX(cobolify: boolean) {
-        if (vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return;
 
-            const document = editor.document;
-            const selection = editor.selection;
-
-            const ascii = document.getText(selection);
-            const hex = VSCOBOLUtils.a2hex(ascii, cobolify);
-            editor.edit(editBuilder => {
-                editBuilder.replace(selection, hex);
-            });
-        }
+        this.replaceSelectionWith(editor, text => VSCOBOLUtils.a2hex(text, cobolify));
     }
 
     public static selectionHEXToASCII() {
-        if (vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return;
 
-            const document = editor.document;
-            const selection = editor.selection;
-
-            const hex = document.getText(selection);
-            const ascii = VSCOBOLUtils.hex2a(hex);
-            editor.edit(editBuilder => {
-                editBuilder.replace(selection, ascii);
-            });
-        }
+        this.replaceSelectionWith(editor, text => VSCOBOLUtils.hex2a(text));
     }
 
     public static selectionToNXHEX(cobolify: boolean) {
-        if (vscode.window.activeTextEditor) {
-            const editor = vscode.window.activeTextEditor;
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) return;
 
-            const document = editor.document;
-            const selection = editor.selection;
-
-            const ascii = document.getText(selection);
-            const hex = VSCOBOLUtils.a2nx(ascii, cobolify);
-            editor.edit(editBuilder => {
-                editBuilder.replace(selection, hex);
-            });
-        }
+        this.replaceSelectionWith(editor, text => VSCOBOLUtils.a2nx(text, cobolify));
     }
 
     private static isControlCode(code: number) {
         return ((code >= 0x0000 && code <= 0x001f) || (code >= 0x007f && code <= 0x009f));
     }
-
+    
     public static a2nx(str: string, cobolify: boolean): string {
-        const arr = [];
-        for (let i = 0, l = str.length; i < l; i++) {
+        let hexString = "";
 
-            const chr = str.charAt(i);
-            const chrBuffer = Buffer.from(chr, "utf16le").reverse(); // make big endian
+        for (const chr of str) {
+            // Convert character to big-endian UTF-16 bytes
+            const chrBuffer = Buffer.from(chr, "utf16le").reverse();
 
-            for (let j = 0; j < chrBuffer.length; j++) {
-                let hex = Number(chrBuffer[j]).toString(16).toUpperCase();
-                if (hex.length === 1) {
-                    hex = "0" + hex;
-                }
-                arr.push(hex);
+            for (const byte of chrBuffer) {
+                hexString += byte.toString(16).toUpperCase().padStart(2, "0");
             }
-
         }
-        const hexString = arr.join("");
 
         return cobolify ? `NX"${hexString}"` : hexString;
     }
 
-    public static nxhex2a(hexx4: string,): string {
-        if (hexx4.length >= 4) {
-            if ((hexx4.charAt(0) === "N" || hexx4.charAt(0) === "n") &&
-                (hexx4.charAt(1) === "X" || hexx4.charAt(0) === "x")) {
-                if (hexx4.charAt(2) === "\"" || hexx4.charAt(2) === "'") {
-                    if (hexx4.endsWith("\"") || hexx4.endsWith("'")) {
-                        const hexx4len = hexx4.length;
-                        hexx4 = hexx4.substring(3, hexx4len - 1);
-                    }
-                }
+    public static nxhex2a(hexString: string): string {
+        // Remove NX"..." or NX'...' wrapper if present
+        if (
+            hexString.length >= 4 &&
+            hexString[0].toUpperCase() === "N" &&
+            hexString[1].toUpperCase() === "X" &&
+            (hexString[2] === '"' || hexString[2] === "'") &&
+            (hexString.endsWith('"') || hexString.endsWith("'"))
+        ) {
+            hexString = hexString.slice(3, -1);
+        }
+
+        const buf = Buffer.from(hexString, "hex");
+        let result = "";
+
+        // Process in chunks to avoid argument limit in fromCharCode
+        const CHUNK_SIZE = 0x8000; // 32k characters
+        for (let i = 0; i < buf.length; i += CHUNK_SIZE * 2) {
+            const chunkLength = Math.min(CHUNK_SIZE, (buf.length - i) / 2);
+            const chars = new Array(chunkLength);
+            for (let j = 0; j < chunkLength; j++) {
+                chars[j] = buf.readUInt16BE(i + j * 2);
             }
+            result += String.fromCharCode(...chars);
         }
 
-        const buf = Buffer.from(hexx4, "hex");
-        const len = (buf.length / 2) | 0;
-        const arr = new Array(len);
-
-        for (let i = 0; i < len; i++) {
-            arr[i] = buf.readUInt16BE(i * 2);
-        }
-        return String.fromCharCode(...arr);
+        return result;
     }
 
     public static a2hex(str: string, cobolify: boolean): string {
-        const arr = [];
-        for (let i = 0, l = str.length; i < l; i++) {
-            let hex = Number(str.charCodeAt(i)).toString(16).toUpperCase();
-            if (hex.length === 1) {
-                hex = "0" + hex;
-            }
-            arr.push(hex);
-        }
-        const hexString = arr.join("");
+        const chunkSize = 1024; // process in chunks to avoid memory issues
+        const hexChunks: string[] = [];
 
+        for (let offset = 0; offset < str.length; offset += chunkSize) {
+            const chunk = str.slice(offset, offset + chunkSize);
+            const hexChunk = Array.from(chunk, c =>
+                c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()
+            ).join("");
+            hexChunks.push(hexChunk);
+        }
+
+        const hexString = hexChunks.join("");
         return cobolify ? `X"${hexString}"` : hexString;
     }
 
     public static hex2a(hex: string): string {
-        if (hex.length >= 3) {
-            if (hex.charAt(0) === "X" || hex.charAt(0) === "x") {
-                if (hex.charAt(1) === "\"" || hex.charAt(1) === "'") {
-                    if (hex.endsWith("\"") || hex.endsWith("'")) {
-                        const hexlen = hex.length;
-                        hex = hex.substring(2, hexlen - 1);
-                    }
-                }
-            }
+        // Remove COBOL X"" or x'' wrappers
+        if (hex.match(/^[Xx]["'][\s\S]*["']$/)) {
+            hex = hex.slice(2, -1);
         }
 
-        if (!(hex.length % 2 === 0)) {
+        // If hex string has odd length, return as-is
+        if (hex.length % 2 !== 0) {
             return hex;
         }
-        let str = "";
 
+        const chars: string[] = [];
         for (let i = 0; i < hex.length; i += 2) {
-            const hexChars = hex.substring(i, i + 2);
-            const charCode = parseInt(hexChars, 16);
-            if (this.isControlCode(charCode)) {
-                str += `[${hexChars}]`
+            const hexPair = hex.slice(i, i + 2);
+            const code = parseInt(hexPair, 16);
+
+            if (this.isControlCode(code)) {
+                chars.push(`[${hexPair}]`);
             } else {
-                str += String.fromCharCode(charCode);
+                chars.push(String.fromCharCode(code));
             }
         }
-        return str;
+
+        return chars.join("");
     }
 
     public static setupFilePaths(settings: ICOBOLSettings) {
-        let invalidSearchDirectory: string[] = settings.invalid_copybookdirs;
-        let fileSearchDirectory: string[] = settings.file_search_directory;
-        let perfile_copybookdirs: string[] = settings.perfile_copybookdirs;
+        const invalidSearchDirectory: string[] = [];
+        const fileSearchDirectory: string[] = settings.file_search_directory;
+        const perfileCopybookDirs: string[] = settings.perfile_copybookdirs;
+        const copybookDirs = settings.copybookdirs;
+        const wsFolders = VSWorkspaceFolders.get(settings);
 
-        let extsdir = settings.copybookdirs;
-        invalidSearchDirectory = settings.invalid_copybookdirs;
-        invalidSearchDirectory.length = 0;
+        // Process default copybook directories
+        this.processCopybookDirs(copybookDirs, settings, fileSearchDirectory, invalidSearchDirectory, wsFolders);
 
-        const ws = VSWorkspaceFolders.get(settings);
+        // Process workspace folders and nested copybook directories
+        if (wsFolders) {
+            this.processWorkspaceFolders(wsFolders, copybookDirs, settings, fileSearchDirectory, invalidSearchDirectory);
+        }
 
-        // step 1 look through the copybook default dirs for "direct" paths and include them in search path
-        for (const ddir of extsdir) {
+        // Remove duplicates
+        settings.file_search_directory = Array.from(new Set(fileSearchDirectory));
+        settings.invalid_copybookdirs = Array.from(new Set(invalidSearchDirectory));
+
+        // Logging
+        this.logFilePaths(wsFolders, fileSearchDirectory, perfileCopybookDirs, invalidSearchDirectory);
+
+        // Populate default symbols and copybooks if recursive search is enabled
+        if (settings.maintain_metadata_recursive_search) {
+            VSCOBOLUtils.populateDefaultCallableSymbols(settings, true);
+            VSCOBOLUtils.populateDefaultCopyBooks(settings, true);
+        }
+    }
+
+    /** Helper: Process top-level copybook directories */
+    private static processCopybookDirs(
+        copybookDirs: string[],
+        settings: ICOBOLSettings,
+        fileSearchDirectory: string[],
+        invalidSearchDirectory: string[],
+        wsFolders?: readonly vscode.WorkspaceFolder[]
+    ) {
+        VSCOBOLUtils.processCopybookAndWorkspaceDirs(copybookDirs, settings, fileSearchDirectory, invalidSearchDirectory, wsFolders);
+    }
+
+    private static processWorkspaceFolders(
+        wsFolders: readonly vscode.WorkspaceFolder[],
+        copybookDirs: string[],
+        settings: ICOBOLSettings,
+        fileSearchDirectory: string[],
+        invalidSearchDirectory: string[]
+    ) {
+        VSCOBOLUtils.processCopybookAndWorkspaceDirs(copybookDirs, settings, fileSearchDirectory, invalidSearchDirectory, wsFolders);
+    }
+
+    private static processCopybookAndWorkspaceDirs(
+        copybookDirs: string[],
+        settings: ICOBOLSettings,
+        fileSearchDirectory: string[],
+        invalidSearchDirectory: string[],
+        wsFolders?: readonly vscode.WorkspaceFolder[]
+    ) {
+        const validateAndAddDir = (dir: string, allowNetworkLogging = false) => {
             try {
-                if (workspace.isTrusted === false) {
-                    // copybooks that have a direct path or a network are only available in full trust
-                    if (COBOLFileUtils.isDirectPath(ddir) || COBOLFileUtils.isNetworkPath(ddir)) {
-                        invalidSearchDirectory.push(ddir);
-                        continue;
-                    }
-                } else {
-                    if (settings.disable_unc_copybooks_directories && COBOLFileUtils.isNetworkPath(ddir)) {
-                        VSLogger.logMessage(" Copybook directory " + ddir + " has been marked as invalid, as it is a unc filename");
-                        invalidSearchDirectory.push(ddir);
-                    }
-                    else if (COBOLFileUtils.isDirectPath(ddir)) {
-                        if (workspace !== undefined && ws !== undefined) {
-                            if (VSCOBOLFileUtils.isPathInWorkspace(ddir, settings) === false) {
-                                if (COBOLFileUtils.isNetworkPath(ddir)) {
-                                    VSLogger.logMessage(" The directory " + ddir + " for performance should be part of the workspace");
-                                }
-                            }
-                        }
+                const isDirect = COBOLFileUtils.isDirectPath(dir);
+                const isNetwork = COBOLFileUtils.isNetworkPath(dir);
 
-                        const startTime = VSExternalFeatures.performance_now();
-                        if (COBOLFileUtils.isDirectory(ddir)) {
-                            const totalTimeInMS = VSExternalFeatures.performance_now() - startTime;
-                            const timeTaken = totalTimeInMS.toFixed(2);
-                            if (totalTimeInMS <= 2000) {
-                                fileSearchDirectory.push(ddir);
-                            } else {
-                                VSLogger.logMessage(" Slow copybook directory dropped " + ddir + " as it took " + timeTaken + "ms");
-                                invalidSearchDirectory.push(ddir);
-                            }
+                if (workspace.isTrusted === false && (isDirect || isNetwork)) {
+                    invalidSearchDirectory.push(dir);
+                    return;
+                }
+
+                if (settings.disable_unc_copybooks_directories && isNetwork) {
+                    VSLogger.logMessage(`Copybook directory ${dir} is marked invalid (UNC path).`);
+                    invalidSearchDirectory.push(dir);
+                    return;
+                }
+
+                if (isDirect) {
+                    if (allowNetworkLogging && wsFolders && !VSCOBOLFileUtils.isPathInWorkspace(dir, settings) && isNetwork) {
+                        VSLogger.logMessage(`Directory ${dir} for performance should be part of the workspace.`);
+                    }
+
+                    const startTime = VSExternalFeatures.performance_now();
+                    if (COBOLFileUtils.isDirectory(dir)) {
+                        const elapsed = VSExternalFeatures.performance_now() - startTime;
+                        if (elapsed <= 2000) {
+                            fileSearchDirectory.push(dir);
                         } else {
-                            invalidSearchDirectory.push(ddir);
+                            VSLogger.logMessage(`Slow copybook directory dropped: ${dir} (${elapsed.toFixed(2)}ms)`);
+                            invalidSearchDirectory.push(dir);
                         }
+                    } else {
+                        invalidSearchDirectory.push(dir);
                     }
                 }
+            } catch (e) {
+                // Ignore errors
             }
-            catch (e) {
-                // continue
-            }
+        };
+
+        // Process top-level copybook directories
+        for (const dir of copybookDirs) {
+            validateAndAddDir(dir, true);
         }
 
-        // step 2
-        if (ws !== undefined) {
-            for (const folder of ws) {
-                // place the workspace folder in the copybook path
-                fileSearchDirectory.push(folder.uri.fsPath);
+        // Process workspace folders if provided
+        if (wsFolders) {
+            for (const folder of wsFolders) {
+                const folderPath = folder.uri.fsPath;
+                fileSearchDirectory.push(folderPath);
 
-                /* now add any extra directories that are below this workspace folder */
-                for (const extdir of extsdir) {
-                    try {
-                        if (COBOLFileUtils.isDirectPath(extdir) === false) {
-                            const sdir = path.join(folder.uri.fsPath, extdir);
-
-                            if (COBOLFileUtils.isDirectory(sdir)) {
-                                if (COBOLFileUtils.isNetworkPath(sdir) && VSCOBOLFileUtils.isPathInWorkspace(sdir, settings) === false) {
-                                    VSLogger.logMessage(" The directory " + sdir + " for performance should be part of the workspace");
-                                }
-
-                                fileSearchDirectory.push(sdir);
-                            } else {
-                                invalidSearchDirectory.push(sdir);
-                            }
-                        }
-                    }
-                    catch (e) {
-                        // VSLogger.logException("dir", e as Error);
+                for (const extDir of copybookDirs) {
+                    if (!COBOLFileUtils.isDirectPath(extDir)) {
+                        const fullPath = path.join(folderPath, extDir);
+                        validateAndAddDir(fullPath);
                     }
                 }
             }
         }
+    }
 
-        const filterfileSearchDirectory = fileSearchDirectory.filter((elem, pos) => fileSearchDirectory.indexOf(elem) === pos);
-        fileSearchDirectory.length = 0;
-        for (const fsd of filterfileSearchDirectory) {
-            fileSearchDirectory.push(fsd);
+    /** Helper: Log file paths for workspace, search, per-file, and invalid directories */
+    private static logFilePaths(
+        wsFolders: readonly vscode.WorkspaceFolder[] | undefined,
+        fileSearchDirectory: string[],
+        perfileCopybookDirs: string[],
+        invalidSearchDirectory: string[]
+    ) {
+        if (wsFolders && wsFolders.length > 0) {
+            VSLogger.logMessage("Workspace Folders:");
+            wsFolders.forEach(folder => VSLogger.logMessage(`  => ${folder.name} @ ${folder.uri.fsPath}`));
         }
 
-        invalidSearchDirectory = invalidSearchDirectory.filter((elem, pos) => invalidSearchDirectory.indexOf(elem) === pos);
-
-        if (ws !== undefined && ws.length !== 0) {
-            VSLogger.logMessage("  Workspace Folders:");
-            for (const folder of ws) {
-                VSLogger.logMessage("   => " + folder.name + " @ " + folder.uri.fsPath);
-            }
+        if (fileSearchDirectory.length > 0) {
+            VSLogger.logMessage("Combined Workspace and CopyBook Folders to search:");
+            fileSearchDirectory.forEach(dir => VSLogger.logMessage(`  => ${dir}`));
         }
 
-        if (fileSearchDirectory.length !== 0) {
-            VSLogger.logMessage("  Combined Workspace and CopyBook Folders to search:");
-            for (const sdir of fileSearchDirectory) {
-                VSLogger.logMessage("   => " + sdir);
-            }
+        if (perfileCopybookDirs.length > 0) {
+            VSLogger.logMessage(`Per File CopyBook directories (${perfileCopybookDirs.length}):`);
+            perfileCopybookDirs.forEach(dir => VSLogger.logMessage(`  => ${dir}`));
         }
 
-        if (perfile_copybookdirs.length !== 0) {
-            VSLogger.logMessage("  Per File CopyBook directories (" + perfile_copybookdirs.length + ")");
-            for (const sdir of perfile_copybookdirs) {
-                VSLogger.logMessage("   => " + sdir);
-            }
-        }
-
-        if (invalidSearchDirectory.length !== 0) {
-            VSLogger.logMessage("  Invalid CopyBook directories (" + invalidSearchDirectory.length + ")");
-            for (const sdir of invalidSearchDirectory) {
-                VSLogger.logMessage("   => " + sdir);
-            }
+        if (invalidSearchDirectory.length > 0) {
+            VSLogger.logMessage(`Invalid CopyBook directories (${invalidSearchDirectory.length}):`);
+            invalidSearchDirectory.forEach(dir => VSLogger.logMessage(`  => ${dir}`));
         }
 
         VSLogger.logMessage("");
-
-        if (settings.maintain_metadata_recursive_search) {
-            VSCOBOLUtils.populateDefaultCallableSymbolsSync(settings, true);
-            VSCOBOLUtils.populateDefaultCopyBooksSync(settings, true);
-        }
     }
 
     public static setupUrlPathsSync(settings: ICOBOLSettings) {
@@ -1189,239 +1075,105 @@ export class VSCOBOLUtils {
     }
 
     public static async setupUrlPaths(settings: ICOBOLSettings) {
-        let invalidSearchDirectory: string[] = [];
-        let URLSearchDirectory: string[] = VSExternalFeatures.getURLCopyBookSearchPath();
-
-        let extsdir = settings.copybookdirs;
-        invalidSearchDirectory = settings.invalid_copybookdirs;
+        const invalidSearchDirectory: Set<string> = new Set(settings.invalid_copybookdirs);
+        const URLSearchDirectory: Set<string> = new Set(VSExternalFeatures.getURLCopyBookSearchPath());
+        const copybookDirs = settings.copybookdirs;
 
         const wsURLs = VSWorkspaceFolders.getFiltered("", settings);
-        if (wsURLs === undefined || wsURLs.length === 0) {
+        if (!wsURLs || wsURLs.length === 0) {
             return;
         }
-        
-        // step 3
-        if (wsURLs !== undefined) {
-            for (const folder of wsURLs) {
-                // place the workspace folder in the copybook path
-                URLSearchDirectory.push(folder.uri.toString());
 
-                /* now add any extra directories that are below this workspace folder */
-                for (const extdir of extsdir) {
-                    try {
-                        if (COBOLFileUtils.isDirectPath(extdir) === false) {
-                            const sdir = `${folder.uri.toString()}/${extdir}`;
+        for (const folder of wsURLs) {
+            // Add workspace folder URL
+            URLSearchDirectory.add(folder.uri.toString());
 
-                            const sdirStat = await vscode.workspace.fs.stat(vscode.Uri.parse(sdir));
-                            if (sdirStat.type & vscode.FileType.Directory) {
-                                URLSearchDirectory.push(sdir);
-                            } else {
-                                invalidSearchDirectory.push("URL as " + sdir);
-                            }
+            // Add extra directories under workspace folder
+            for (const extDir of copybookDirs) {
+                try {
+                    if (!COBOLFileUtils.isDirectPath(extDir)) {
+                        const dirUrl = `${folder.uri.toString()}/${extDir}`;
+                        const stat = await vscode.workspace.fs.stat(vscode.Uri.parse(dirUrl));
+                        if (stat.type & vscode.FileType.Directory) {
+                            URLSearchDirectory.add(dirUrl);
+                        } else {
+                            invalidSearchDirectory.add(`URL as ${dirUrl}`);
                         }
                     }
-                    catch (e) {
-                        // VSLogger.logException("dir", e as Error);
-                    }
+                } catch (e) {
+                    // Ignore errors
                 }
             }
         }
 
-        invalidSearchDirectory = invalidSearchDirectory.filter((elem, pos) => invalidSearchDirectory.indexOf(elem) === pos);
+        // Logging
+        VSLogger.logMessage("  Workspace Folders (URLs):");
+        wsURLs.forEach(folder => VSLogger.logMessage(`   => ${folder.name} @ ${folder.uri.fsPath}`));
 
-        if (wsURLs !== undefined && wsURLs.length !== 0) {
-            VSLogger.logMessage("  Workspace Folders (URLs):");
-            for (const folder of wsURLs) {
-                VSLogger.logMessage("   => " + folder.name + " @ " + folder.uri.fsPath);
-            }
-        }
-
-        if (URLSearchDirectory.length !== 0) {
+        if (URLSearchDirectory.size > 0) {
             VSLogger.logMessage("  Combined Workspace and CopyBook Folders to search (URL):");
-            for (const sdir of URLSearchDirectory) {
-                VSLogger.logMessage("   => " + sdir);
-            }
+            URLSearchDirectory.forEach(dir => VSLogger.logMessage(`   => ${dir}`));
         }
 
-        if (invalidSearchDirectory.length !== 0) {
-            VSLogger.logMessage("  Invalid CopyBook directories (" + invalidSearchDirectory.length + ")");
-            for (const sdir of invalidSearchDirectory) {
-                VSLogger.logMessage("   => " + sdir);
-            }
+        if (invalidSearchDirectory.size > 0) {
+            VSLogger.logMessage(`  Invalid CopyBook directories (${invalidSearchDirectory.size}):`);
+            invalidSearchDirectory.forEach(dir => VSLogger.logMessage(`   => ${dir}`));
         }
 
         VSLogger.logMessage("");
     }
 
-    // public static dumpCallTargets(activeEditor: vscode.TextEditor, externalFeatures: IExternalFeatures) {
-    //     const settings = VSCOBOLConfiguration.get();
-
-    //     const current: ICOBOLSourceScanner | undefined = VSCOBOLSourceScanner.getCachedObject(activeEditor.document, settings);
-    //     if (current === undefined) {
-    //         externalFeatures.logMessage(`Unable to fold ${externalFeatures}, as it is has not been parsed`);
-    //         return;
-    //     }
-
-    //     const exampleMap = new Map<string, string>();
-    //     const snippetMap = new Map<string, string>();
-    //     const paramDeclarationMap = new Map<string, string>();
-
-    //     const gcf = VSCOBOLSourceScanner.getCachedObject(activeEditor.document, settings);
-    //     if (gcf !== undefined) {
-    //         for (const [target, params] of gcf.callTargets) {
-    //             let actualName = params.OriginalToken;
-    //             if (actualName.length > 1 && (actualName[0] !== "\"")) {
-    //                 const possibleName = gcf.constantsOrVariables.get(target.toLowerCase());
-    //                 if (possibleName !== undefined) {
-    //                     const firstToken: COBOLToken = possibleName[0];
-    //                     const sourceHandler = new FileSourceHandler(firstToken.filename, externalFeatures);
-    //                     const lineAtToken = sourceHandler.getLine(firstToken.startLine, true);
-    //                     if (lineAtToken !== undefined) {
-    //                         const lineAfterToken = lineAtToken.substring(firstToken.startColumn + firstToken.tokenName.length).trimStart();
-    //                         const lineAfterTokenLower = lineAfterToken.toLowerCase();
-    //                         const indexOfValue = lineAfterTokenLower.indexOf("value");
-    //                         if (indexOfValue !== -1) {
-    //                             actualName = lineAfterToken.substring(indexOfValue + 5).trim();
-    //                         }
-    //                     }
-    //                 }
-    //             }
-
-    //             actualName = COBOLSourceScanner.trimLiteral(actualName);
-    //             // const targetCall = KnownAPIs.getCallTarget(actualName);
-    //             // externalFeatures.logMessage(` description : "${targetCall?.description}"`);
-
-    //             const sbExample = new StringBuilder();
-    //             const sbSnippetBody = new StringBuilder();
-    //             const sbParamDecl = new StringBuilder();
-
-    //             if (params.CallParameters.length === 0) {
-    //                 sbExample.AppendLine(`call "${actualName}"`);
-    //                 sbSnippetBody.AppendLine(`call "${actualName}"`);
-    //             } else {
-    //                 sbExample.AppendLine(`call "${actualName}" using`);
-    //                 sbSnippetBody.AppendLine(`call "${actualName}" using`);
-    //                 let paramCounter = 1;
-    //                 for (const param of params.CallParameters) {
-    //                     //${1:CONDITION}"
-    //                     switch (param.using) {
-    //                         case UsingState.BY_VALUE:
-    //                             sbExample.AppendLine(` by value ${param.name}`);
-    //                             sbSnippetBody.AppendLine(` by value \${${paramCounter}:${param.name}}`);
-    //                             break;
-    //                         case UsingState.BY_REF:
-    //                             sbExample.AppendLine(` by reference ${param.name}`);
-    //                             sbSnippetBody.AppendLine(` by reference \${${paramCounter}:${param.name}}`);
-    //                             break;
-    //                         case UsingState.RETURNING:
-    //                             sbExample.AppendLine(` returning ${param.name}`);
-    //                             sbSnippetBody.AppendLine(` returning \${${paramCounter}:${param.name}}`);
-    //                             break;
-    //                     }
-
-    //                     const possibleName = gcf.constantsOrVariables.get(param.name.toLowerCase());
-    //                     if (possibleName !== undefined) {
-    //                         const firstToken: COBOLToken = possibleName[0];
-    //                         const sourceHandler = new FileSourceHandler(firstToken.filename, externalFeatures);
-    //                         const lineAtToken = sourceHandler.getLine(firstToken.startLine, true);
-    //                         if (lineAtToken !== undefined) {
-    //                             let lineAfterToken = lineAtToken.substring(firstToken.startColumn + firstToken.tokenName.length).trim();
-    //                             if (lineAfterToken.endsWith(".")) {
-    //                                 lineAfterToken = lineAfterToken.slice(0, -1);
-    //                             }
-    //                             if (lineAfterToken.toLowerCase().indexOf("typedef") === -1) {
-    //                                 sbParamDecl.AppendLine(`${param.name} => ${lineAfterToken}`);
-    //                             }
-    //                         }
-    //                     }
-    //                     paramCounter++;
-    //                 }
-    //                 sbExample.AppendLine("end-call");
-    //                 sbSnippetBody.AppendLine("end-call");
-    //                 sbSnippetBody.AppendLine("${0}");
-
-    //             }
-
-    //             exampleMap.set(actualName, sbExample.ToString());
-    //             snippetMap.set(actualName, sbSnippetBody.ToString());
-    //             paramDeclarationMap.set(actualName, sbParamDecl.ToString());
-    //         }
-    //         // const exampleArray = Object.fromEntries(exampleMap);
-    //         // externalFeatures.logMessage(`${JSON.stringify(exampleArray)}`);
-    //         // const snipperArray = Object.fromEntries(snippetMap);
-    //         // externalFeatures.logMessage(`${JSON.stringify(snipperArray)}`);
-    //         for (const [a, b] of exampleMap) {
-    //             const decls = paramDeclarationMap.get(a);
-    //             const declString = decls === undefined ? "" : decls + "\r\n" + b;
-    //             const varDecls = `[ "${a}", ${JSON.stringify(declString)} ],`;
-    //             externalFeatures.logMessage(varDecls);
-    //         }
-    //     }
-    // }
-
-
     public static getDebugConfig(workspaceFolder: vscode.WorkspaceFolder, debugFile: string): vscode.DebugConfiguration {
-
-        // "type": "cobol",
-        // "request": "launch",
-        // "name": "COBOL: Launch",
-        // "program": "${workspaceFolder}/HelloWorld",
-        // "cwd": "${workspaceFolder}",
-        // "stopOnEntry": true
-
         return {
             name: "Debug COBOL",
             type: "cobol",
             request: "launch",
-            cwd: `${workspaceFolder.uri.fsPath}`,
-            program: `${debugFile}`,
+            cwd: workspaceFolder.uri.fsPath,
+            program: debugFile,
             stopOnEntry: true
         };
     }
 
     public static runOrDebug(fsPath: string, debug: boolean): void {
-        if (commandTerminal === undefined) {
+        if (!commandTerminal) {
             commandTerminal = vscode.window.createTerminal(commandTerminalName);
         }
 
-        let prefRunner = "";
-        let prefRunnerDebug = "";
         const fsDir = path.dirname(fsPath);
+        let runner = "";
+        let runnerArgs = "";
 
+        const showTerminalAndRun = (cmd: string) => {
+            commandTerminal!.show(true);
+            commandTerminal!.sendText(cmd);
+        };
+
+        // Handle ACU COBOL files
         if (fsPath.endsWith("acu")) {
-            if (COBOLFileUtils.isWin32) {
-                prefRunner = "wrun32";
-                prefRunnerDebug = debug ? "-d " : "";
-            } else {
-                prefRunner = "runcbl";
-                prefRunnerDebug = debug ? "-d " : "";
-            }
-
-            commandTerminal.show(true);
-            commandTerminal.sendText(`${prefRunner} ${prefRunnerDebug}${fsPath}`);
+            runner = COBOLFileUtils.isWin32 ? "wrun32" : "runcbl";
+            runnerArgs = debug ? "-d " : "";
+            showTerminalAndRun(`${runner} ${runnerArgs}${fsPath}`);
             return;
         }
 
-        // TODO: need to add .NET dll support!
+        // Handle .NET and other runtime files
         if (fsPath.endsWith("int") || fsPath.endsWith("gnt") || fsPath.endsWith("so") || fsPath.endsWith("dll")) {
             const mfExtension = vscode.extensions.getExtension(ExtensionDefaults.rocketCOBOLExtension);
 
-            if (mfExtension === undefined) {
+            if (!mfExtension) {
                 if (COBOLFileUtils.isWin32) {
-                    prefRunner = "run";
-                    prefRunnerDebug = debug ? "(+A) " : "";
+                    runner = "run";
+                    runnerArgs = debug ? "(+A) " : "";
                 } else {
-                    prefRunner = debug ? "anim" : "cobrun";
+                    runner = debug ? "anim" : "cobrun";
                 }
-
-                commandTerminal.show(true);
-                commandTerminal.sendText(`${prefRunner} ${prefRunnerDebug}${fsPath}`);
+                showTerminalAndRun(`${runner} ${runnerArgs}${fsPath}`);
                 return;
-            } else {
-                const workspacePath = VSCOBOLFileUtils.getBestWorkspaceFolder(fsDir);
-                if (workspacePath !== undefined) {
-                    vscode.debug.startDebugging(workspacePath, VSCOBOLUtils.getDebugConfig(workspacePath, fsPath));
-                }
+            }
+
+            const workspacePath = VSCOBOLFileUtils.getBestWorkspaceFolder(fsDir);
+            if (workspacePath) {
+                vscode.debug.startDebugging(workspacePath, VSCOBOLUtils.getDebugConfig(workspacePath, fsPath));
             }
         }
     }

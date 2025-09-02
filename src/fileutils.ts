@@ -4,124 +4,54 @@ import { ICOBOLSettings } from "./iconfiguration";
 export class COBOLFileUtils {
     static readonly isWin32 = process.platform === "win32";
 
-    public static isFile(sdir: string): boolean {
+    public static isFile(path: string): boolean {
         try {
-            if (fs.existsSync(sdir)) {
-                // not on windows, do extra check for +x perms (protects exe & dirs)
-                // if (!COBOLFileUtils.isWin32) {
-                //     try {
-                //         fs.accessSync(sdir, fs.constants.F_OK | fs.constants.X_OK);
-                //         return false;
-                //     }
-                //     catch {
-                //         return true;
-                //     }
-                // }
-
-                return true;
-            }
-        }
-        catch {
+            return fs.existsSync(path);
+        } catch {
             return false;
         }
-        return false;
+    }
+
+    public static isDirectory(path: string): boolean {
+        try {
+            const stat = fs.statSync(path, { bigint: true });
+            return stat.isDirectory();
+        } catch {
+            return false;
+        }
     }
 
     public static isValidCopybookExtension(filename: string, settings: ICOBOLSettings): boolean {
-        const lastDot = filename.lastIndexOf(".");
-        let extension = filename;
-        if (lastDot !== -1) {
-            extension = filename.substring(1 + lastDot);
-        }
-
-        const exts = settings.copybookexts;
-        for (let extpos = 0; extpos < exts.length; extpos++) {
-            if (exts[extpos] === extension) {
-                return true;
-            }
-        }
-        return false;
+        const extension = filename.includes(".") ? filename.split(".").pop()! : filename;
+        return settings.copybookexts.includes(extension);
     }
 
     public static isValidProgramExtension(filename: string, settings: ICOBOLSettings): boolean {
-        const lastDot = filename.lastIndexOf(".");
-        let extension = "";
-        if (lastDot !== -1) {
-            extension = filename.substring(1 + lastDot);
-        }
-
-        const exts = settings.program_extensions;
-        for (let extpos = 0; extpos < exts.length; extpos++) {
-            if (exts[extpos] === extension) {
-                return true;
-            }
-        }
-        return false;
+        const extension = filename.includes(".") ? filename.split(".").pop()! : "";
+        return settings.program_extensions.includes(extension);
     }
 
-    public static isDirectPath(dir: string): boolean {
-        if (dir === undefined && dir === null) {
-            return false;
-        }
+    public static isDirectPath(dir: string | undefined | null): boolean {
+        if (!dir) return false;
 
         if (COBOLFileUtils.isWin32) {
-            if (dir.length > 2 && dir[1] === ":") {
-                return true;
-            }
-
-            if (dir.length > 1 && dir[0] === "\\") {
-                return true;
-            }
-
-            return false;
+            return (dir.length > 2 && dir[1] === ":") || dir.startsWith("\\");
         }
 
-        if (dir.length > 1 && dir[0] === "/") {
-            return true;
-        }
-
-        return false;
+        return dir.startsWith("/");
     }
 
-    // only handle unc filenames
-    public static isNetworkPath(dir: string): boolean {
-        if (dir === undefined && dir === null) {
-            return false;
-        }
-
-        if (COBOLFileUtils.isWin32) {
-            if (dir.length > 1 && dir[0] === "\\") {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    public static isDirectory(sdir: string): boolean {
-        try {
-            const f = fs.statSync(sdir, { bigint: true });
-            if (f && f.isDirectory()) {
-                return true;
-            }
-        }
-        catch {
-            return false;
-        }
-        return false;
+    public static isNetworkPath(dir: string | undefined | null): boolean {
+        if (!dir) return false;
+        return COBOLFileUtils.isWin32 && dir.startsWith("\\");
     }
 
     public static cleanupFilename(filename: string): string {
-        let trimmedFilename = filename.trim();
-
-        if (trimmedFilename.startsWith("\"") && trimmedFilename.endsWith("\"")) {
-            return trimmedFilename.substring(1, trimmedFilename.length-1);
+        let trimmed = filename.trim();
+        if ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) || 
+            (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+            return trimmed.slice(1, -1);
         }
-
-        if (trimmedFilename.startsWith("\'") && trimmedFilename.endsWith("\'")) {
-            return trimmedFilename.substring(1, trimmedFilename.length-1);
-        }
-        
-        return trimmedFilename;
+        return trimmed;
     }
 }

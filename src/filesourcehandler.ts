@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 
-import { ISourceHandler, ICommentCallback, ISourceHandlerLite, commentRange } from "./isourcehandler";
+import { ISourceHandler, ICommentCallback, ISourceHandlerLite, CommentRange } from "./isourcehandler";
 import { ESourceFormat, IExternalFeatures } from "./externalfeatures";
 import { getCOBOLKeywordDictionary } from "./keywords/cobolKeywords";
 import { ExtensionDefaults } from "./extensionDefaults";
@@ -22,7 +22,7 @@ export class FileSourceHandler implements ISourceHandler, ISourceHandlerLite {
     shortFilename: string;
     languageId = ExtensionDefaults.defaultCOBOLLanguage;
     format: ESourceFormat = ESourceFormat.unknown;
-    notedCommentRanges: commentRange[] = [];
+    notedCommentRanges: CommentRange[] = [];
     commentsIndex = new Map<number, string>();
     commentsIndexInline = new Map<number, boolean>();
     settings: ICOBOLSettings;

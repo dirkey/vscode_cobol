@@ -2,7 +2,7 @@ import { ISourceHandler, ISourceHandlerLite } from "./isourcehandler";
 import { COBOLFileAndColumnSymbol, COBOLFileSymbol, COBOLWorkspaceFile } from "./cobolglobalcache";
 import { ICOBOLSettings } from "./iconfiguration";
 import { ESourceFormat, IExternalFeatures } from "./externalfeatures";
-import { portResult } from "./vsdirectivesconv";
+import { PortResult } from "./vsdirectivesconv";
 import { CallTargetInformation, COBOLCopybookToken, COBOLToken, COBOLVariable, SharedSourceReferences, SQLDeclare } from "./cobolsourcescanner";
 
 
@@ -33,7 +33,7 @@ export interface ICOBOLSourceScanner{
     readonly methods: Map<string, COBOLToken>;
     readonly copyBooksUsed: Map<string, COBOLCopybookToken[]>;
     readonly diagMissingFileWarnings: Map<string, COBOLFileSymbol>;
-    readonly portWarnings: portResult[];
+    readonly portWarnings: PortResult[];
     readonly generalWarnings: COBOLFileSymbol[];
     readonly commentReferences: COBOLFileAndColumnSymbol[];
     readonly parse4References: boolean;

@@ -13,7 +13,7 @@ import * as path from "path";
 import { SourceFormat } from "./sourceformat";
 import { ExtensionDefaults } from "./extensionDefaults";
 import { SplitTokenizer } from "./splittoken";
-import { SourcePorter, portResult } from "./vsdirectivesconv";
+import { SourcePorter, PortResult } from "./vsdirectivesconv";
 import { ICOBOLSourceScanner, ICOBOLSourceScannerEvents } from "./icobolsourcescanner";
 
 export enum COBOLTokenStyle {
@@ -684,7 +684,7 @@ export class COBOLSourceScanner implements ICommentCallback, ICOBOLSourceScanner
     public readonly copyBooksUsed: Map<string, COBOLCopybookToken[]>;
 
     public readonly diagMissingFileWarnings: Map<string, COBOLFileSymbol>;
-    public readonly portWarnings: portResult[];
+    public readonly portWarnings: PortResult[];
     public readonly generalWarnings: COBOLFileSymbol[];
 
     public readonly commentReferences: COBOLFileAndColumnSymbol[];

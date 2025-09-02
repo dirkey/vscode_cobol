@@ -351,13 +351,13 @@ async function handleScopedChange(event:ConfigurationChangeEvent, scope?: vscode
             VSCOBOLUtils.setupFilePaths(settings);
             await VSCOBOLUtils.setupUrlPaths(settings);
 
-            VSCOBOLUtils.populateDefaultCallableSymbolsSync(settings, true);
-            VSCOBOLUtils.populateDefaultCopyBooksSync(settings, true);
+            VSCOBOLUtils.populateDefaultCallableSymbols(settings, true);
+            VSCOBOLUtils.populateDefaultCopyBooks(settings, true);
         }
 
         if (maintain_metadata_recursive_search) {
-            VSCOBOLUtils.populateDefaultCallableSymbolsSync(settings, true);
-            VSCOBOLUtils.populateDefaultCopyBooksSync(settings, true);
+            VSCOBOLUtils.populateDefaultCallableSymbols(settings, true);
+            VSCOBOLUtils.populateDefaultCopyBooks(settings, true);
         }
 
         if (outline_changed) {
@@ -365,7 +365,7 @@ async function handleScopedChange(event:ConfigurationChangeEvent, scope?: vscode
         }
 
         if (custom_intellisense_rules_changed) {
-            VSCustomIntelliseRules.Default.reFreshConfiguration(settings);
+            VSCustomIntelliseRules.Default.refreshConfiguration(settings);
         }
 
         if (enable_comments_tags_changed || comments_tags_changed) {

@@ -11,7 +11,7 @@ import {
 } from "vscode";
 import { ExtensionDefaults } from "./extensionDefaults";
 import { ESourceFormat } from "./externalfeatures";
-import { commentRange, ICommentCallback, ISourceHandlerLite } from "./isourcehandler";
+import { CommentRange, ICommentCallback, ISourceHandlerLite } from "./isourcehandler";
 import { VSCOBOLSourceScanner } from "./vscobolscanner";
 import { VSCOBOLConfiguration } from "./vsconfiguration";
 import { TextLanguage, VSExtensionUtils } from "./vsextutis";
@@ -98,14 +98,14 @@ class CommentColourHandlerImpl extends ColourTagHandler implements ICommentCallb
         if (!config.enable_comment_tags) return;
 
         const commentUpper = commentLine.toUpperCase();
-        let bestMatch: commentRange | undefined;
+        let bestMatch: CommentRange | undefined;
         let lowestPos = commentLine.length;
 
         for (const tag of this.tags.keys()) {
             const pos = commentUpper.indexOf(tag, startPos + 1);
             if (pos !== -1 && pos < lowestPos) {
                 lowestPos = pos;
-                bestMatch = new commentRange(
+                bestMatch = new CommentRange(
                     lineNumber,
                     pos,
                     config.comment_tag_word ? tag.length : commentUpper.length - startPos,
@@ -144,7 +144,7 @@ class CommentColourHandlerImpl extends ColourTagHandler implements ICommentCallb
         }
     }
 
-    private buildDecorations(ranges: commentRange[]): Map<string, DecorationOptions[]> {
+    private buildDecorations(ranges: CommentRange[]): Map<string, DecorationOptions[]> {
         const decorations = new Map<string, DecorationOptions[]>();
 
         for (const range of ranges) {

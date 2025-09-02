@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { workspace } from "vscode";
 import { ESourceFormat, IExternalFeatures } from "./externalfeatures";
-import { ISourceHandler, ICommentCallback, ISourceHandlerLite, commentRange } from "./isourcehandler";
+import { ISourceHandler, ICommentCallback, ISourceHandlerLite, CommentRange } from "./isourcehandler";
 import { getCOBOLKeywordDictionary } from "./keywords/cobolKeywords";
 import { SimpleStringBuilder } from "./stringutils";
 import { colourCommentHandler } from "./vscolourcomments";
@@ -15,7 +15,7 @@ export class VSCodeSourceHandlerLite implements ISourceHandlerLite {
     private tabSize: number;
     private lineCount: number;
     private languageId: string;
-    private notedCommentRanges: commentRange[];
+    private notedCommentRanges: CommentRange[];
 
     constructor(document: vscode.TextDocument) {
         this.document = document;
@@ -61,7 +61,7 @@ export class VSCodeSourceHandlerLite implements ISourceHandlerLite {
         return buf.ToString();
     }
 
-    getNotedComments(): commentRange[] {
+    getNotedComments(): CommentRange[] {
         return this.notedCommentRanges;
     }
 
@@ -84,7 +84,7 @@ export class VSCodeSourceHandler implements ISourceHandler, ISourceHandlerLite {
     private languageId: string;
     private format: ESourceFormat = ESourceFormat.unknown;
     private externalFeatures: IExternalFeatures = VSExternalFeatures;
-    private notedCommentRanges: commentRange[] = [];
+    private notedCommentRanges: CommentRange[] = [];
     private commentsIndex = new Map<number, string>();
     private commentsIndexInline = new Map<number, boolean>();
     private tabSize: number;
@@ -140,7 +140,7 @@ export class VSCodeSourceHandler implements ISourceHandler, ISourceHandlerLite {
     getFilename(): string { return this.document?.fileName ?? ""; }
     getShortWorkspaceFilename(): string { return this.shortWorkspaceFilename; }
     getIsSourceInWorkSpace(): boolean { return this.isSourceInWorkSpace; }
-    getNotedComments(): commentRange[] { return this.notedCommentRanges; }
+    getNotedComments(): CommentRange[] { return this.notedCommentRanges; }
 
     setDumpAreaA(flag: boolean): void { this.dumpNumbersInAreaA = flag; }
     setDumpAreaBOnwards(flag: boolean): void { this.dumpAreaBOnwards = flag; }

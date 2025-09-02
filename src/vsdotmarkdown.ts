@@ -1,415 +1,315 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
 import { ICOBOLSettings } from "./iconfiguration";
 import { VSCOBOLSourceScanner } from "./vscobolscanner";
-import { COBOLToken, COBOLTokenStyle, ParseState, SourceReference_Via_Length } from "./cobolsourcescanner";
+import {
+  COBOLToken,
+  COBOLTokenStyle,
+  ParseState,
+} from "./cobolsourcescanner";
 import { ICOBOLSourceScanner } from "./icobolsourcescanner";
-var fs = require('fs');
 
-class programWindowState {
-    current_style: string;
-    current_program: ICOBOLSourceScanner;
+// ---------------- Program Window State ----------------
+class ProgramWindowState {
+  currentStyle: string;
+  currentProgram: ICOBOLSourceScanner;
 
-    private constructor(current_style: string, current_program: ICOBOLSourceScanner) {
-        this.current_style = current_style;
-        this.current_program = current_program;
+  private constructor(currentStyle: string, currentProgram: ICOBOLSourceScanner) {
+    this.currentStyle = currentStyle;
+    this.currentProgram = currentProgram;
+  }
+
+  private static styleMap = new Map<string, ProgramWindowState>();
+
+  static get(url: string, program: ICOBOLSourceScanner): ProgramWindowState {
+    let state = this.styleMap.get(url);
+    if (!state) {
+      state = new ProgramWindowState("TD", program);
+      this.styleMap.set(url, state);
     }
-
-    static current_style_map = new Map<string,programWindowState>();
-
-    static get_programWindowState(url: string, current_program: ICOBOLSourceScanner):programWindowState {
-        let value = programWindowState.current_style_map.get(url)   
-        if (value !== undefined) {
-            return value;
-        }
-
-        value = new programWindowState("TD", current_program);
-        programWindowState.current_style_map.set(url, value);
-        return value;
-    }
+    return state;
+  }
 }
 
-function generate_partial_graph(linesArray: string[], clickLines: string[], state: ParseState, para_or_section: Map<string, COBOLToken>) {
-    for (const [paragraph, targetToken] of para_or_section) {
-        const wordLower = paragraph.toLowerCase();
-        const targetRefs: SourceReference_Via_Length[] | undefined = state.currentSectionOutRefs.get(wordLower);
+// ---------------- Generate Partial Graph ----------------
+function generatePartialGraph(
+  lines: string[],
+  clickLines: string[],
+  state: ParseState,
+  tokens: Map<string, COBOLToken>
+) {
+  for (const [name, token] of tokens) {
+    const nameLower = name.toLowerCase();
+    const references = state.currentSectionOutRefs.get(nameLower);
 
-        clickLines.push(`click ${targetToken.tokenNameLower} call callback("${targetToken.tokenName}","${targetToken.filenameAsURI}", ${targetToken.startLine},${targetToken.startColumn}) "${targetToken.description}"`)
-
-        if (targetRefs !== undefined) {
-            if (targetToken.isImplicitToken) {
-                linesArray.push(`${targetToken.tokenNameLower}[${targetToken.description}]`);
-            }
-
-            let tempLines:string[] = [];
-            for (const sr of targetRefs) {
-                // skip definition
-                if (sr.line === targetToken.startLine && sr.column === targetToken.startColumn) {
-                    continue;
-                }
-
-                if (sr.tokenStyle === COBOLTokenStyle.Paragraph || sr.tokenStyle === COBOLTokenStyle.Section) {
-                    if (sr.reason === 'perform') {
-                        tempLines.push(`${targetToken.tokenNameLower} --> ${sr.nameLower}`);
-                    } else {
-                        tempLines.push(`${targetToken.tokenNameLower} -->|${sr.reason}|${sr.nameLower}`);
-                    }
-                }
-            }
-
-            for (const item of new Set(tempLines)) {
-                linesArray.push(item);
-            }
-            
-        }
-    }
-}
-
-export class DotGraphPanelView {
-    public static currentPanel: DotGraphPanelView | undefined;
-    private readonly _panel: vscode.WebviewPanel;
-    private _disposables: vscode.Disposable[] = [];
-
-    private constructor(context: vscode.ExtensionContext, url:string, state: programWindowState, panel: vscode.WebviewPanel, linesArray: string[]) {
-        // ... other code ...
-        this._panel = panel;
-        this._panel.webview.html = this._getWebviewContent(context, url, state, panel, linesArray);
-
-        this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
-    }
-
-    public static render(context: vscode.ExtensionContext, url: string, wstate: programWindowState, linesArray: string[], programName: string) {
-        if (DotGraphPanelView.currentPanel) {
-            DotGraphPanelView.currentPanel._panel.reveal(vscode.ViewColumn.Beside, true);
-            DotGraphPanelView.currentPanel._panel.webview.html = DotGraphPanelView.currentPanel._getWebviewContent(context, url, wstate, DotGraphPanelView.currentPanel._panel, linesArray);
-
-            return DotGraphPanelView.currentPanel._panel;
-        } else {
-            const resourcesDirectory = vscode.Uri.joinPath(context.extensionUri, 'resources')
-
-            const panel = vscode.window.createWebviewPanel(
-                'cobolCallGraph',
-                'Program:' + programName,
-                {
-                    viewColumn: vscode.ViewColumn.Beside,
-                    preserveFocus: true
-                },
-                {
-                    enableScripts: true,
-                    localResourceRoots: [resourcesDirectory]
-                }
-            );
-            DotGraphPanelView.currentPanel = new DotGraphPanelView(context, url, wstate, panel, linesArray);
-            return panel;
-        }
-    }
-
-    private _getWebviewContent(context: vscode.ExtensionContext, url:string, wstyle:programWindowState, panel: vscode.WebviewPanel, linesArray: string[]) {
-        const style = wstyle.current_style;
-        let htmlContent = `<!DOCTYPE html>
-  <html>
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" 
-        content="default-src 'none'; 
-        style-src cspSource 'unsafe-inline';
-        script-src 'nonce-nonce' 'unsafe-inline';
-        ">
-    <style type="text/css">
-        .diagram-container {
-            width: 98%;
-            overflow: hidden;
-            border: 1px solid #ccc;
-            margin-bottom: 10px;
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        svg {
-            cursor: grab;
-        }
-    </style>
-  </head>
-  <body class="vscode-body">
-    <script type="text/javascript">
-      const _config = {
-        vscode: {
-          minimap: false,
-          dark: 'dark',
-          light: 'neutral'
-        }
-      };
-    </script>
-    
-    <script src="panzoom.min.js"></script>
-
-    <script type="module">
-      import mermaid from 'mermaid.esm.min.mjs';
-      const vscode = acquireVsCodeApi();
-
-      window.callback = function (message,filename,line,col) {
-        // Call back to the extension context to save the image to the workspace folder.
-        vscode.postMessage({
-            command: 'golink',
-            text: message+","+filename+","+line+","+col
-        });
-      };
-      
-      document.querySelector('#chart-style').addEventListener("change", function() {
-        // Call back to the extension context to save the image to the workspace folder
-        vscode.postMessage({
-            command: 'change-style',
-            text: "__url__"+","+this.value
-        });
-      });
-
-      let config = { startOnLoad: false, 
-                     useMaxWidth: true, 
-                     theme: "neutral",
-                     securityLevel: 'loose'
-                     };
-      mermaid.initialize(config);
-      await mermaid.run({
-        querySelector: '.mermaid',
-        postRenderCallback: (id) => {
-            const container = document.getElementById("diagram-container");
-            const svgElement = container.querySelector("svg");
-
-            // Initialize Panzoom
-            const panzoomInstance = Panzoom(svgElement, {
-                maxScale: 5,
-                minScale: 0.5,
-                step: 0.1,
-            });
-
-            // Add mouse wheel zoom
-            container.addEventListener("wheel", (event) => {
-                panzoomInstance.zoomWithWheel(event);
-            });
-        }
-      });
-
-      
-    </script>
-    <h3>Program : __program__</h3>
-    <p/>
-    <div class="diagram-container" id="diagram-container">
-     <div class="mermaid" id="mermaid1">
-    ${linesArray.join("\n")}
-     </div>
-    </div>
-
-    <div class="vscode-select">
-      <p>Style:
-      <select name="chart-style" id="chart-style">
-          <option value="" selected="selected" hidden="hidden">Choose here</option>
-          <option value="TD">Top Down</option>
-          <option value="BT">Bottom-to-top</option>
-          <option value="RL">Right-to-left</option>
-          <option value="LR">Left-to-right</option>
-      </select>
-     </p>
-    </div>
-
-    <p />
-    <hr class="vscode-divider">
-    <p />
-    <h5>This is a navigation aid not a source analysis feature.</h5>
-
-  </body>
-</html>`;
-
-        const jsMermaidPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'mermaid', 'mermaid.esm.min.mjs');
-        const jsMerVis = panel.webview.asWebviewUri(jsMermaidPath);
-        htmlContent = htmlContent.replace('mermaid.esm.min.mjs', jsMerVis.toString());
-
-        const jsPanzoomPath = vscode.Uri.joinPath(context.extensionUri, 'resources', 'panzoom', 'panzoom.min.js');
-        const jsPanzoomPathVis = panel.webview.asWebviewUri(jsPanzoomPath);
-        htmlContent = htmlContent.replace('panzoom.min.js', jsPanzoomPathVis.toString());
-
-        const cssElements = vscode.Uri.joinPath(context.extensionUri, 'resources', 'vscode-elements.css');
-
-        const elementsCode: string = fs.readFileSync(cssElements.path).toString();
-        htmlContent = htmlContent.replace('vscode-elements.', elementsCode);
-
-        const nonce = getNonce();
-        htmlContent = htmlContent.replace('nonce-nonce', `nonce-${nonce}`);
-        htmlContent = htmlContent.replace(/<script /g, `<script nonce="${nonce}" `);
-        htmlContent = htmlContent.replace(/<link /g, `<link nonce="${nonce}" `);
-
-        htmlContent = htmlContent.replace('cspSource', panel.webview.cspSource);
-
-        htmlContent = htmlContent.replace("__url__", url);
-        htmlContent = htmlContent.replace("__style__", style);
-        htmlContent = htmlContent.replace("__program__", getProgramName(wstyle.current_program));
-        return htmlContent;
-    }
-
-    public dispose() {
-        DotGraphPanelView.currentPanel = undefined;
-
-        this._panel.dispose();
-
-        while (this._disposables.length) {
-            const disposable = this._disposables.pop();
-            if (disposable) {
-                disposable.dispose();
-            }
-        }
-    }
-}
-
-export async function view_dot_callgraph(context: vscode.ExtensionContext, settings: ICOBOLSettings) {
-    if (settings.enable_program_information === false) {
-        vscode.window.showErrorMessage("Unable to generate call graph (coboleditor.enable_program_information)");
-        return;
-    }
-    if (!vscode.window.activeTextEditor) {
-        return;
-    }
-
-    const current = VSCOBOLSourceScanner.getCachedObject(vscode.window.activeTextEditor.document, settings);
-    if (current === undefined) {
-        return;
-    }
-
-    const url = current.sourceHandler.getUriAsString();
-    const current_state = programWindowState.get_programWindowState(url, current)
-    const linesArray: string[] = getCurrentProgramCallGraph(current_state, false, true);
-    const curp = getProgramName(current);
-    const webviewPanel = DotGraphPanelView.render(context, url, current_state, linesArray, curp);
-    webviewPanel.webview.onDidReceiveMessage(
-        async message => {
-            switch (message.command) {
-                case 'golink':
-                    await goto_link(message.text);
-                    return;
-                case 'change-style':
-                    const messages = message.text.split(",");
-                    const new_url = messages[0];
-                    const new_style = messages[1];
-                    const current_state = programWindowState.get_programWindowState(url, current)
-                    current_state.current_style = new_style;
-                    const newLinesArray: string[] = getCurrentProgramCallGraph(current_state, false, true);
-                    DotGraphPanelView.render(context, new_url, current_state, newLinesArray, curp);
-                    return;
-            }
-        },
-        undefined,
-        context.subscriptions
+    clickLines.push(
+      `click ${token.tokenNameLower} call callback("${token.tokenName}","${token.filenameAsURI}",${token.startLine},${token.startColumn}) "${token.description}"`
     );
 
-    vscode.workspace.onDidChangeTextDocument(changeEvent => {
-        if (settings.enable_program_information === false) {
-            return;
-        }
+    if (!references) continue;
 
-        if (vscode.window.activeTextEditor?.document) {
-            if (changeEvent.document.uri != vscode.window.activeTextEditor.document.uri) return;
-            let current = VSCOBOLSourceScanner.getCachedObject(vscode.window.activeTextEditor.document, settings);
-            if (current === undefined) {
-                return;
-            }
-            const url = current.sourceHandler.getUriAsString();
-            const current_state = programWindowState.get_programWindowState(url, current)
-            current_state.current_program = current;
-            const updatedLinesArray: string[] = getCurrentProgramCallGraph(current_state, false, true);
-            DotGraphPanelView.render(context, url, current_state, updatedLinesArray, getProgramName(current));
-        }
+    if (token.isImplicitToken) {
+      lines.push(`${token.tokenNameLower}[${token.description}]`);
+    }
 
-    });
+    const tempLines: string[] = [];
+    for (const ref of references) {
+      if (ref.line === token.startLine && ref.column === token.startColumn) continue;
+
+      if (ref.tokenStyle === COBOLTokenStyle.Paragraph || ref.tokenStyle === COBOLTokenStyle.Section) {
+        const edge = ref.reason === "perform"
+          ? `${token.tokenNameLower} --> ${ref.nameLower}`
+          : `${token.tokenNameLower} -->|${ref.reason}|${ref.nameLower}`;
+        tempLines.push(edge);
+      }
+    }
+
+    for (const item of new Set(tempLines)) lines.push(item);
+  }
 }
 
-async function goto_link(messageText: string) {
-    const messages = messageText.split(',');
-    // const place = messages[0];
-    const place_url = messages[1];
-    const place_line = Number.parseInt(messages[2]);
-    const place_col = Number.parseInt(messages[3]);
-    var pos1 = new vscode.Position(place_line, place_col);
-    var openPath = vscode.Uri.parse(place_url);
-    await vscode.workspace.openTextDocument(openPath).then(doc => {
-        vscode.window.showTextDocument(doc).then(editor => {
-            editor.selections = [new vscode.Selection(pos1, pos1)];
-            var range = new vscode.Range(pos1, pos1);
-            editor.revealRange(range);
-        });
-    });
+// ---------------- DotGraphPanelView ----------------
+export class DotGraphPanelView {
+  public static currentPanel: DotGraphPanelView | undefined;
+  private readonly panel: vscode.WebviewPanel;
+  private disposables: vscode.Disposable[] = [];
 
+  private constructor(
+    context: vscode.ExtensionContext,
+    url: string,
+    state: ProgramWindowState,
+    panel: vscode.WebviewPanel,
+    lines: string[]
+  ) {
+    this.panel = panel;
+    this.panel.webview.html = this.getWebviewContent(context, url, state, panel, lines);
+    this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+  }
+
+  public static render(
+    context: vscode.ExtensionContext,
+    url: string,
+    state: ProgramWindowState,
+    lines: string[],
+    programName: string
+  ): vscode.WebviewPanel {
+    if (DotGraphPanelView.currentPanel) {
+      const current = DotGraphPanelView.currentPanel;
+      current.panel.reveal(vscode.ViewColumn.Beside, true);
+      current.panel.webview.html = current.getWebviewContent(context, url, state, current.panel, lines);
+      return current.panel;
+    }
+
+    const resourcesDir = vscode.Uri.joinPath(context.extensionUri, "resources");
+    const panel = vscode.window.createWebviewPanel(
+      "cobolCallGraph",
+      `Program: ${programName}`,
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      { enableScripts: true, localResourceRoots: [resourcesDir] }
+    );
+
+    DotGraphPanelView.currentPanel = new DotGraphPanelView(context, url, state, panel, lines);
+    return panel;
+  }
+
+  private getWebviewContent(
+    context: vscode.ExtensionContext,
+    url: string,
+    state: ProgramWindowState,
+    panel: vscode.WebviewPanel,
+    lines: string[]
+  ): string {
+    const style = state.currentStyle;
+    let html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src cspSource 'unsafe-inline'; script-src 'nonce-nonce' 'unsafe-inline';">
+<style>
+.diagram-container { width: 98%; overflow: hidden; border: 1px solid #ccc; margin: 0 auto 10px auto; display: block; }
+svg { cursor: grab; }
+</style>
+</head>
+<body class="vscode-body">
+<script>
+const _config = { vscode: { minimap: false, dark: 'dark', light: 'neutral' } };
+</script>
+
+<script src="panzoom.min.js"></script>
+<script type="module">
+import mermaid from 'mermaid.esm.min.mjs';
+const vscode = acquireVsCodeApi();
+
+window.callback = (message,filename,line,col) => {
+  vscode.postMessage({ command: 'golink', text: message + "," + filename + "," + line + "," + col });
+};
+
+document.querySelector('#chart-style').addEventListener("change", function() {
+  vscode.postMessage({ command: 'change-style', text: "__url__" + "," + this.value });
+});
+
+mermaid.initialize({ startOnLoad: false, useMaxWidth: true, theme: "neutral", securityLevel: 'loose' });
+await mermaid.run({
+  querySelector: '.mermaid',
+  postRenderCallback: (id) => {
+    const container = document.getElementById("diagram-container");
+    const svg = container.querySelector("svg");
+    const panzoomInstance = Panzoom(svg, { maxScale:5, minScale:0.5, step:0.1 });
+    container.addEventListener("wheel", e => panzoomInstance.zoomWithWheel(e));
+  }
+});
+</script>
+
+<h3>Program: __program__</h3>
+<div class="diagram-container" id="diagram-container">
+  <div class="mermaid" id="mermaid1">${lines.join("\n")}</div>
+</div>
+
+<div class="vscode-select">
+<p>Style:
+<select name="chart-style" id="chart-style">
+<option value="" selected hidden>Choose here</option>
+<option value="TD">Top Down</option>
+<option value="BT">Bottom-to-top</option>
+<option value="RL">Right-to-left</option>
+<option value="LR">Left-to-right</option>
+</select>
+</p>
+</div>
+
+<hr class="vscode-divider">
+<h5>This is a navigation aid, not a source analysis feature.</h5>
+</body>
+</html>`;
+
+    // Replace resources
+    html = html.replace(
+      "mermaid.esm.min.mjs",
+      panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "resources/mermaid/mermaid.esm.min.mjs")).toString()
+    );
+    html = html.replace(
+      "panzoom.min.js",
+      panel.webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, "resources/panzoom/panzoom.min.js")).toString()
+    );
+
+    const cssPath = vscode.Uri.joinPath(context.extensionUri, "resources/vscode-elements.css");
+    html = html.replace("vscode-elements.", fs.readFileSync(cssPath.fsPath).toString());
+
+    const nonce = getNonce();
+    html = html.replace(/nonce-nonce/g, `nonce-${nonce}`);
+    html = html.replace(/<script /g, `<script nonce="${nonce}" `);
+    html = html.replace(/<link /g, `<link nonce="${nonce}" `);
+    html = html.replace("cspSource", panel.webview.cspSource);
+    html = html.replace("__url__", url);
+    html = html.replace("__style__", style);
+    html = html.replace("__program__", getProgramName(state.currentProgram));
+
+    return html;
+  }
+
+  public dispose() {
+    DotGraphPanelView.currentPanel = undefined;
+    this.panel.dispose();
+    this.disposables.forEach(d => d.dispose());
+    this.disposables = [];
+  }
 }
 
-function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+// ---------------- Utility Functions ----------------
+function getNonce(): string {
+  return Array.from({ length: 32 }, () =>
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".charAt(Math.floor(Math.random() * 62))
+  ).join("");
 }
 
-function getProgramName(current: ICOBOLSourceScanner) {
-    if (current.ImplicitProgramId.length !== 0) {
-        return current.ImplicitProgramId;
-    } else {
-        if (current.ProgramId.length !== 0) {
-            return current.ProgramId;
-        } else {
-            return "?"
-        }
-    }
+function getProgramName(program: ICOBOLSourceScanner): string {
+  return program.ImplicitProgramId || program.ProgramId || "?";
 }
 
-function getCurrentProgramCallGraph(current_state: programWindowState, asMarkdown: boolean, includeEvents: boolean) {
-    const current = current_state.current_program;
-    const current_style = current_state.current_style;
+function getCurrentProgramCallGraph(state: ProgramWindowState, asMarkdown: boolean, includeEvents: boolean): string[] {
+  const current = state.currentProgram;
+  const lines: string[] = [];
+  const clickLines: string[] = [];
+  const parseState = current.sourceReferences.state;
 
-    const linesArray: string[] = [];
-    const clickArray: string[] = [];
-    const state = current.sourceReferences.state;
+  if (asMarkdown) {
+    lines.push(`# ${getProgramName(current)}`, "", "```mermaid");
+  }
 
-    if (asMarkdown) {
-        linesArray.push(`# ${getProgramName(current)}`);
-        linesArray.push("");
-        linesArray.push("```mermaid");
+  lines.push(`flowchart ${state.currentStyle};`);
+  generatePartialGraph(lines, clickLines, parseState, current.sections);
+  generatePartialGraph(lines, clickLines, parseState, current.paragraphs);
+
+  if (includeEvents) lines.push(...clickLines);
+  if (asMarkdown) lines.push("```");
+
+  return lines;
+}
+
+async function gotoLink(message: string) {
+  const [_, url, lineStr, colStr] = message.split(",");
+  const line = parseInt(lineStr);
+  const col = parseInt(colStr);
+  const pos = new vscode.Position(line, col);
+  const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(url));
+  const editor = await vscode.window.showTextDocument(doc);
+  editor.selections = [new vscode.Selection(pos, pos)];
+  editor.revealRange(new vscode.Range(pos, pos));
+}
+
+// ---------------- Exports ----------------
+export async function view_dot_callgraph(context: vscode.ExtensionContext, settings: ICOBOLSettings) {
+  if (!settings.enable_program_information || !vscode.window.activeTextEditor) return;
+
+  const current = VSCOBOLSourceScanner.getCachedObject(vscode.window.activeTextEditor.document, settings);
+  if (!current) return;
+
+  const url = current.sourceHandler.getUriAsString();
+  const state = ProgramWindowState.get(url, current);
+  const lines = getCurrentProgramCallGraph(state, false, true);
+  const webviewPanel = DotGraphPanelView.render(context, url, state, lines, getProgramName(current));
+
+  webviewPanel.webview.onDidReceiveMessage(async message => {
+    switch (message.command) {
+      case "golink": await gotoLink(message.text); break;
+      case "change-style": {
+        const [newUrl, newStyle] = message.text.split(",");
+        state.currentStyle = newStyle;
+        const newLines = getCurrentProgramCallGraph(state, false, true);
+        DotGraphPanelView.render(context, newUrl, state, newLines, getProgramName(current));
+        break;
+      }
     }
-    linesArray.push(`flowchart ${current_style};`);
+  }, undefined, context.subscriptions);
 
-    generate_partial_graph(linesArray, clickArray, state, current.sections);
-    generate_partial_graph(linesArray, clickArray, state, current.paragraphs);
+  vscode.workspace.onDidChangeTextDocument(event => {
+    if (!settings.enable_program_information) return;
+    if (vscode.window.activeTextEditor?.document.uri !== event.document.uri) return;
 
-    if (includeEvents) {
-        linesArray.push(...clickArray);
-    }
+    const updated = VSCOBOLSourceScanner.getCachedObject(event.document, settings);
+    if (!updated) return;
 
-    if (asMarkdown) {
-        linesArray.push("```")
-    }
-
-    return linesArray;
+    const updatedState = ProgramWindowState.get(updated.sourceHandler.getUriAsString(), updated);
+    updatedState.currentProgram = updated;
+    const updatedLines = getCurrentProgramCallGraph(updatedState, false, true);
+    DotGraphPanelView.render(context, updated.sourceHandler.getUriAsString(), updatedState, updatedLines, getProgramName(updated));
+  });
 }
 
 export async function newFile_dot_callgraph(settings: ICOBOLSettings) {
-    if (!vscode.window.activeTextEditor) {
-        return;
-    }
+  if (!vscode.window.activeTextEditor) return;
 
-    const current = VSCOBOLSourceScanner.getCachedObject(vscode.window.activeTextEditor.document, settings);
-    if (current === undefined) {
-        return;
-    }
+  const current = VSCOBOLSourceScanner.getCachedObject(vscode.window.activeTextEditor.document, settings);
+  if (!current) return;
 
-    const current_state = programWindowState.get_programWindowState(current.sourceHandler.getUriAsString(), current)
-    current_state.current_program = current;
-    const doclang = "markdown";
-    const linesArray: string[] = getCurrentProgramCallGraph(current_state, true, false);
-    vscode.workspace.openTextDocument({ language: "markdown" }).then(async document => {
-        vscode.window.showTextDocument(document);
-        const editor = await vscode.window.showTextDocument(document);
-        if (editor !== undefined) {
-            const linesAsOne = linesArray.join("\n");
-            await editor.insertSnippet(new vscode.SnippetString(linesAsOne), new vscode.Range(0, 0, 1 + linesArray.length, 0));
-            await vscode.languages.setTextDocumentLanguage(document, doclang);
-        }
-        // await document.save();
-    });
+  const state = ProgramWindowState.get(current.sourceHandler.getUriAsString(), current);
+  state.currentProgram = current;
+
+  const lines = getCurrentProgramCallGraph(state, true, false);
+  const doc = await vscode.workspace.openTextDocument({ language: "markdown" });
+  const editor = await vscode.window.showTextDocument(doc);
+
+  const snippet = new vscode.SnippetString(lines.join("\n"));
+  await editor.insertSnippet(snippet, new vscode.Range(0, 0, lines.length + 1, 0));
 }

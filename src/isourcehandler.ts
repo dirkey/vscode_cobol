@@ -6,18 +6,13 @@ export interface ICommentCallback {
     processComment(config: ICOBOLSettings, sourceHandler: ISourceHandlerLite, commentLine: string, sourceFilename: string, sourceLineNumber:number, startPos: number, format: ESourceFormat) : void;
 }
 
-export class commentRange {
-    public startLine: number;
-    public startColumn: number;
-    public length: number;
-    public commentStyle: string;
-
-    constructor(startLine: number, startColumn: number, length: number, commentStyle: string) {
-        this.startLine = startLine;
-        this.startColumn = startColumn;
-        this.length = length;
-        this.commentStyle = commentStyle;
-    }
+export class CommentRange {
+    constructor(
+        public startLine: number,
+        public startColumn: number,
+        public length: number,
+        public commentStyle: string
+    ) {}
 }
 
 export interface ISourceHandlerLite {
@@ -25,7 +20,7 @@ export interface ISourceHandlerLite {
     getLanguageId():string;
     getFilename(): string;
     getLineTabExpanded(lineNumber: number):string|undefined;
-    getNotedComments(): commentRange[];
+    getNotedComments(): CommentRange[];
     getCommentAtLine(lineNumber: number):string;
 }
 
@@ -47,7 +42,7 @@ export interface ISourceHandler {
     getShortWorkspaceFilename(): string;
     getLanguageId():string;
     setSourceFormat(format: ESourceFormat):void;
-    getNotedComments(): commentRange[];
+    getNotedComments(): CommentRange[];
     getCommentAtLine(lineNumber: number):string;
     getText(startLine: number, startColumn:number, endLine: number, endColumn:number): string;
 }
